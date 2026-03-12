@@ -1,0 +1,303 @@
+id: coding-github
+class: environment
+image: selu-cap-coding-github:latest
+
+tools:
+  - name: open_repository
+    description: >
+      Clone or refresh a GitHub repository in the workspace and detect the default base branch.
+      Accepts owner/repo or a GitHub HTTPS URL.
+    input_schema:
+      type: object
+      properties:
+        repository:
+          type: string
+          description: "Repository identifier, for example 'owner/repo' or 'https://github.com/owner/repo'."
+        directory:
+          type: string
+          description: "Optional workspace-relative directory name. Defaults to repos/<owner>__<repo>."
+      required:
+        - repository
+    recommended_policy: allow
+
+  - name: create_feature_branch
+    description: >
+      Create and checkout a feature branch using the required pattern feature-<slug>.
+    input_schema:
+      type: object
+      properties:
+        feature:
+          type: string
+          description: "Feature name or slug. If it does not start with feature-, the prefix is added automatically."
+        from_base:
+          type: boolean
+          description: "If true, reset branch from base branch before creating it. Default true."
+      required:
+        - feature
+    recommended_policy: allow
+
+  - name: list_files
+    description: >
+      List repository files recursively from a path.
+    input_schema:
+      type: object
+      properties:
+        path:
+          type: string
+          description: "Optional repository-relative path. Defaults to repository root."
+        max_entries:
+          type: integer
+          description: "Maximum files to return. Default 200."
+      required: []
+    recommended_policy: allow
+
+  - name: read_file
+    description: >
+      Read a repository file.
+    input_schema:
+      type: object
+      properties:
+        path:
+          type: string
+          description: "Repository-relative file path."
+        max_bytes:
+          type: integer
+          description: "Maximum number of bytes to return. Default 20000."
+      required:
+        - path
+    recommended_policy: allow
+
+  - name: search_text
+    description: >
+      Search text in repository files using ripgrep.
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: "Search query text or regex."
+        path:
+          type: string
+          description: "Optional repository-relative path to scope search."
+        max_results:
+          type: integer
+          description: "Maximum matches to return. Default 100."
+      required:
+        - query
+    recommended_policy: allow
+
+  - name: apply_patch
+    description: >
+      Apply structured file edits by writing full file content.
+      Use either path+content for one file or files[] for batch updates.
+    input_schema:
+      type: object
+      properties:
+        path:
+          type: string
+          description: "Single repository-relative file path."
+        content:
+          type: string
+          description: "Full replacement content for the single file."
+        files:
+          type: array
+          description: "Batch updates."
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              content:
+                type: string
+            required:
+              - path
+              - content
+      required: []
+    recommended_policy: allow
+
+  - name: run_checks
+    description: >
+      Run allowlisted validation commands (for example tests, lint, build) and return results.
+    input_schema:
+      type: object
+      properties:
+        commands:
+          type: array
+          items:
+            type: string
+          description: "Commands to run. Every command must be in the check allowlist."
+        stop_on_failure:
+          type: boolean
+          description: "Stop after first failed command. Default true."
+      required:
+        - commands
+    recommended_policy: allow
+
+  - name: lsp_probe
+    description: >
+      Detect repository language and available LSP servers in the container.
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+    recommended_policy: allow
+
+  - name: lsp_definition
+    description: >
+      Resolve symbol definition using a language server for a file position.
+    input_schema:
+      type: object
+      properties:
+        path:
+          type: string
+          description: "Repository-relative file path."
+        line:
+          type: integer
+          description: "0-based line number."
+        character:
+          type: integer
+          description: "0-based character position in line."
+        language:
+          type: string
+          description: "Optional language override (rust, python, go, typescript, javascript, java, kotlin)."
+      required:
+        - path
+        - line
+        - character
+    recommended_policy: allow
+
+  - name: lsp_references
+    description: >
+      Resolve symbol references using a language server for a file position.
+    input_schema:
+      type: object
+      properties:
+        path:
+          type: string
+          description: "Repository-relative file path."
+        line:
+          type: integer
+          description: "0-based line number."
+        character:
+          type: integer
+          description: "0-based character position in line."
+        language:
+          type: string
+          description: "Optional language override (rust, python, go, typescript, javascript, java, kotlin)."
+        include_declaration:
+          type: boolean
+          description: "Include declaration in returned references. Default false."
+        max_results:
+          type: integer
+          description: "Maximum references to return. Default 200."
+      required:
+        - path
+        - line
+        - character
+    recommended_policy: allow
+
+  - name: git_status
+    description: >
+      Show git branch and working tree status.
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+    recommended_policy: allow
+
+  - name: git_diff
+    description: >
+      Show git diff for unstaged or staged changes.
+    input_schema:
+      type: object
+      properties:
+        staged:
+          type: boolean
+          description: "If true, show staged diff."
+        path:
+          type: string
+          description: "Optional repository-relative path filter."
+      required: []
+    recommended_policy: allow
+
+  - name: commit_changes
+    description: >
+      Commit repository changes with a commit message.
+    input_schema:
+      type: object
+      properties:
+        message:
+          type: string
+          description: "Commit message."
+        add_all:
+          type: boolean
+          description: "If true, run git add -A before commit. Default true."
+      required:
+        - message
+    recommended_policy: allow
+
+  - name: push_branch
+    description: >
+      Push current branch to origin. Requires approval.
+    input_schema:
+      type: object
+      properties:
+        remote:
+          type: string
+          description: "Remote name. Default origin."
+        branch:
+          type: string
+          description: "Branch name. Defaults to current branch."
+      required: []
+    recommended_policy: ask
+
+  - name: create_pull_request
+    description: >
+      Create a GitHub pull request from the current branch. Requires approval.
+      Fails by default if previous checks were not successful.
+    input_schema:
+      type: object
+      properties:
+        title:
+          type: string
+          description: "Pull request title."
+        body:
+          type: string
+          description: "Pull request body."
+        base:
+          type: string
+          description: "Base branch. Defaults to detected default branch."
+        head:
+          type: string
+          description: "Head branch. Defaults to current branch."
+        draft:
+          type: boolean
+          description: "Create as draft. Default false."
+        allow_failed_checks:
+          type: boolean
+          description: "If true, allow PR creation even if checks failed. Default false."
+      required:
+        - title
+    recommended_policy: ask
+
+network:
+  mode: allowlist
+  hosts:
+    - "github.com:443"
+    - "api.github.com:443"
+    - "codeload.github.com:443"
+    - "raw.githubusercontent.com:443"
+
+filesystem: workspace
+
+credentials:
+  - name: GITHUB_TOKEN
+    scope: user
+    required: true
+    description: "GitHub personal access token with repo and pull-request permissions"
+
+resources:
+  max_memory_mb: 1024
+  max_cpu_fraction: 1.0
+  max_cpu_seconds: 600
+  pids_limit: 128

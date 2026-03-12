@@ -1,0 +1,9 @@
+id: coding-github
+name: Coding Assistant
+routing: delegate
+session:
+  trigger: mention
+  idle_timeout_minutes: 480
+memory:
+  policy: none
+  top_k: 0
