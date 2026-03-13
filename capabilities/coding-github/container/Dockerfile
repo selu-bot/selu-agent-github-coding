@@ -20,13 +20,26 @@ RUN apt-get update \
     ripgrep \
     ca-certificates \
     curl \
+    gzip \
     nodejs \
     npm \
     golang-go \
-    rust-analyzer \
     openjdk-17-jre-headless \
     unzip \
     && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+      amd64) ra_arch="x86_64-unknown-linux-gnu" ;; \
+      arm64) ra_arch="aarch64-unknown-linux-gnu" ;; \
+      *) echo "Unsupported architecture: ${arch}"; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-${ra_arch}.gz" -o /tmp/rust-analyzer.gz; \
+    gunzip /tmp/rust-analyzer.gz; \
+    install -m 0755 /tmp/rust-analyzer /usr/local/bin/rust-analyzer; \
+    rm -f /tmp/rust-analyzer; \
+    rust-analyzer --version
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
