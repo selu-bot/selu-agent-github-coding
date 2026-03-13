@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -226,7 +227,9 @@ def _run_git(
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["git"]
     if token:
-        cmd.extend(["-c", f"http.extraHeader=Authorization: Bearer {token}"])
+        # GitHub git-over-https expects Basic auth; PAT in Bearer header may be ignored.
+        basic = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+        cmd.extend(["-c", f"http.extraHeader=Authorization: Basic {basic}"])
     cmd.extend(git_args)
 
     env = os.environ.copy()
