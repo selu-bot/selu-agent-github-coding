@@ -1172,6 +1172,7 @@ class CapabilityServicer(capability_pb2_grpc.CapabilityServicer):
         del context
         tool = request.tool_name
         thread_id = _normalize_thread_id(request.thread_id)
+        log.info("Invoke tool=%s thread_id=%s", tool, thread_id)
 
         handler = TOOL_HANDLERS.get(tool)
         if handler is None:
@@ -1212,10 +1213,13 @@ class CapabilityServicer(capability_pb2_grpc.CapabilityServicer):
         try:
             result = handler(args, config, thread_id)
             result_json = json.dumps(result, ensure_ascii=False)
+            log.info("Tool success tool=%s thread_id=%s", tool, thread_id)
             return capability_pb2.InvokeResponse(result_json=result_json.encode("utf-8"))
         except ToolError as exc:
+            log.warning("Tool error tool=%s thread_id=%s error=%s", tool, thread_id, exc)
             return capability_pb2.InvokeResponse(error=str(exc))
         except subprocess.TimeoutExpired as exc:
+            log.warning("Tool timeout tool=%s thread_id=%s error=%s", tool, thread_id, exc)
             return capability_pb2.InvokeResponse(error=f"Command timed out: {exc}")
         except Exception as exc:
             log.exception("Unhandled error in tool %s", tool)
