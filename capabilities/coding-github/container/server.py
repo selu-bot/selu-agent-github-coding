@@ -749,45 +749,82 @@ def handle_apply_patch(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
     repo_root = Path(state["repo_root"])
 
     updates: List[Dict[str, Any]] = []
+    mode = "unknown"
     batch = args.get("files")
     if isinstance(batch, list) and batch:
         updates = [item for item in batch if isinstance(item, dict)]
+        mode = "batch_full_content"
     else:
         path = args.get("path")
         content = args.get("content")
         if isinstance(path, str) and isinstance(content, str):
             updates = [{"path": path, "content": content}]
+            mode = "single_full_content"
+        else:
+            find = args.get("find")
+            replace = args.get("replace")
+            if isinstance(path, str) and isinstance(find, str) and isinstance(replace, str):
+                updates = [{"path": path, "find": find, "replace": replace}]
+                mode = "single_find_replace"
 
     if not updates:
         raise ToolError(
             "Invalid apply_patch args. Send either "
             '{"path":"repo/file","content":"<full file text>"} '
             "or "
-            '{"files":[{"path":"repo/file","content":"<full file text>"}]}. '
+            '{"files":[{"path":"repo/file","content":"<full file text>"}]} '
+            "or "
+            '{"path":"repo/file","find":"<exact old text>","replace":"<new text>"}. '
             f"Received {_args_shape(args)}."
         )
 
     changed = []
     for update in updates:
         rel_path = str(update.get("path", "")).strip()
-        content = update.get("content")
-        if not rel_path or not isinstance(content, str):
-            raise ToolError("Each file update needs string fields: path and content.")
-
         target = _safe_repo_path(repo_root, rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        old = target.read_text(encoding="utf-8") if target.exists() else ""
 
-        old = target.read_text(encoding="utf-8") if target.exists() else None
-        if old == content:
+        content = update.get("content")
+        if isinstance(content, str):
+            if not rel_path:
+                raise ToolError("Each file update needs a non-empty string path.")
+
+            if old == content:
+                continue
+
+            target.write_text(content, encoding="utf-8")
+            changed.append(target.relative_to(repo_root).as_posix())
             continue
 
-        target.write_text(content, encoding="utf-8")
+        find = update.get("find")
+        replace = update.get("replace")
+        if not rel_path or not isinstance(find, str) or not isinstance(replace, str):
+            raise ToolError("Each file update needs either path+content or path+find+replace.")
+        if not target.exists() or not target.is_file():
+            raise ToolError(f"File does not exist for find/replace: {rel_path}")
+        if not find:
+            raise ToolError("find must be a non-empty string for find/replace mode.")
+        count = old.count(find)
+        if count == 0:
+            raise ToolError(f"find text was not found in file: {rel_path}")
+        if count > 1:
+            raise ToolError(
+                f"find text matches {count} locations in {rel_path}; provide a more specific snippet."
+            )
+        new_content = old.replace(find, replace, 1)
+        if new_content == old:
+            continue
+
+        target.write_text(new_content, encoding="utf-8")
         changed.append(target.relative_to(repo_root).as_posix())
 
+    log.info("apply_patch completed mode=%s changed_count=%d", mode, len(changed))
     return {
         "ok": True,
         "changed_files": changed,
         "changed_count": len(changed),
+        "mode": mode,
     }
 
 

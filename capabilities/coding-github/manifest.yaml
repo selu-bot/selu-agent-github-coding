@@ -88,8 +88,8 @@ tools:
 
   - name: apply_patch
     description: >
-      Apply structured file edits by writing full file content.
-      Use either path+content for one file or files[] for batch updates.
+      Apply structured file edits.
+      Supports path+find+replace for focused edits, path+content for full-file write, or files[] for batch full-file writes.
     input_schema:
       type: object
       additionalProperties: false
@@ -97,6 +97,12 @@ tools:
         path:
           type: string
           description: "Single repository-relative file path."
+        find:
+          type: string
+          description: "Exact text to find in the target file (single-match required)."
+        replace:
+          type: string
+          description: "Replacement text used with find."
         content:
           type: string
           description: "Full replacement content for the single file."

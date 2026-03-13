@@ -32,7 +32,10 @@ You can use coding tools via `coding-github__*`.
 
 ## apply_patch contract
 
-- `coding-github__apply_patch` only accepts full-file writes.
-- For one file, always send JSON with both string fields: `{"path":"...","content":"<full file text>"}`.
-- For multiple files, send `{"files":[{"path":"...","content":"<full file text>"}]}`.
-- Do not send patch hunks, partial arguments, or path-only calls.
+- Prefer focused edits with:
+  `{"path":"...","find":"<exact old text>","replace":"<new text>"}`.
+- Full-file write is also valid for one file:
+  `{"path":"...","content":"<full file text>"}`.
+- Batch full-file writes are valid:
+  `{"files":[{"path":"...","content":"<full file text>"}]}`.
+- Never send path-only calls. Do not send patch hunks.

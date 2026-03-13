@@ -27,6 +27,7 @@ jobs:
         run: |
           owner="${{ github.repository_owner }}"
           echo "cap_image=${owner,,}/selu-cap-coding-github" >> "$GITHUB_OUTPUT"
+          echo "base_image=${owner,,}/selu-cap-coding-github-base" >> "$GITHUB_OUTPUT"
 
       - name: Extract version from tag
         id: version
@@ -44,14 +45,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check toolchain base image
+        id: base
+        run: |
+          base_ref="${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1"
+          if docker manifest inspect "${base_ref}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push toolchain base image
+        if: steps.base.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: capabilities/coding-github/container
+          file: capabilities/coding-github/container/Dockerfile.base
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=coding-github-base
+          cache-to: type=gha,mode=max,scope=coding-github-base
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-latest
+
       - name: Build and push capability image
         uses: docker/build-push-action@v6
         with:
           context: capabilities/coding-github/container
           push: true
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1
+          cache-from: type=gha,scope=coding-github-app
+          cache-to: type=gha,mode=max,scope=coding-github-app
           tags: |
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:latest
