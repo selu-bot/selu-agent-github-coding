@@ -114,12 +114,6 @@ tools:
               - path
               - content
             additionalProperties: false
-      anyOf:
-        - required:
-            - path
-            - content
-        - required:
-            - files
       required: []
     recommended_policy: allow
 
