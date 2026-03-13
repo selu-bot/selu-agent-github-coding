@@ -1,8 +1,10 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 COPY capability.proto .
 RUN python -m grpc_tools.protoc \
     --proto_path=. \
@@ -14,7 +16,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
     git \
     ripgrep \
@@ -25,8 +29,7 @@ RUN apt-get update \
     npm \
     golang-go \
     default-jre-headless \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
+    unzip
 
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -68,15 +71,19 @@ RUN set -eux; \
     timeout 5s kotlin-language-server --version || true
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
-RUN npm install -g \
+RUN --mount=type=cache,target=/root/.npm \
+    npm install -g \
     typescript \
     typescript-language-server \
     bash-language-server \
     yaml-language-server
 
-RUN go install golang.org/x/tools/gopls@latest \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    go install golang.org/x/tools/gopls@latest \
     && install -m 0755 "$(go env GOPATH)/bin/gopls" /usr/local/bin/gopls
 
 COPY --from=builder /build/capability_pb2.py /build/capability_pb2_grpc.py ./

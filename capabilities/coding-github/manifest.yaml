@@ -92,6 +92,7 @@ tools:
       Use either path+content for one file or files[] for batch updates.
     input_schema:
       type: object
+      additionalProperties: false
       properties:
         path:
           type: string
@@ -112,6 +113,13 @@ tools:
             required:
               - path
               - content
+            additionalProperties: false
+      anyOf:
+        - required:
+            - path
+            - content
+        - required:
+            - files
       required: []
     recommended_policy: allow
 

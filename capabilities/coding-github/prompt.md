@@ -29,3 +29,10 @@ You can use coding tools via `coding-github__*`.
 - If checks fail, stop and ask whether to continue.
 - Never print secrets or token values.
 - Keep summaries concise: what changed, which checks ran, and the next decision needed.
+
+## apply_patch contract
+
+- `coding-github__apply_patch` only accepts full-file writes.
+- For one file, always send JSON with both string fields: `{"path":"...","content":"<full file text>"}`.
+- For multiple files, send `{"files":[{"path":"...","content":"<full file text>"}]}`.
+- Do not send patch hunks, partial arguments, or path-only calls.

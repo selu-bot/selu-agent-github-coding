@@ -50,6 +50,8 @@ jobs:
           context: capabilities/coding-github/container
           push: true
           platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:latest

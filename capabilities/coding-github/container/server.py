@@ -116,6 +116,21 @@ def _clip(text: str, max_chars: int = MAX_TOOL_OUTPUT) -> str:
     return text[: max_chars - 3] + "..."
 
 
+def _args_shape(args: Any) -> str:
+    if not isinstance(args, dict):
+        return f"type={type(args).__name__}"
+    keys = sorted(args.keys())
+    parts = [f"keys={keys}"]
+    if isinstance(args.get("path"), str):
+        parts.append(f"path_len={len(args['path'])}")
+    if isinstance(args.get("content"), str):
+        parts.append(f"content_len={len(args['content'])}")
+    files = args.get("files")
+    if isinstance(files, list):
+        parts.append(f"files_count={len(files)}")
+    return " ".join(parts)
+
+
 def _normalize_thread_id(thread_id: str) -> str:
     value = (thread_id or "").strip()
     return value if value else DEFAULT_THREAD_ID
@@ -744,7 +759,13 @@ def handle_apply_patch(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
             updates = [{"path": path, "content": content}]
 
     if not updates:
-        raise ToolError("apply_patch requires either path+content or files[].")
+        raise ToolError(
+            "Invalid apply_patch args. Send either "
+            '{"path":"repo/file","content":"<full file text>"} '
+            "or "
+            '{"files":[{"path":"repo/file","content":"<full file text>"}]}. '
+            f"Received {_args_shape(args)}."
+        )
 
     changed = []
     for update in updates:
@@ -1209,6 +1230,7 @@ class CapabilityServicer(capability_pb2_grpc.CapabilityServicer):
                 args = {primary: args}
             else:
                 return capability_pb2.InvokeResponse(error="Arguments must be a JSON object")
+        log.info("Invoke args tool=%s thread_id=%s %s", tool, thread_id, _args_shape(args))
 
         try:
             result = handler(args, config, thread_id)
