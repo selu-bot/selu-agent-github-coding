@@ -24,7 +24,7 @@ RUN apt-get update \
     nodejs \
     npm \
     golang-go \
-    openjdk-17-jre-headless \
+    default-jre-headless \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
@@ -41,19 +41,43 @@ RUN set -eux; \
     rm -f /tmp/rust-analyzer; \
     rust-analyzer --version
 
+RUN set -eux; \
+    curl -fsSL "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz" -o /tmp/jdtls.tar.gz; \
+    mkdir -p /opt/jdtls; \
+    tar -xzf /tmp/jdtls.tar.gz -C /opt/jdtls; \
+    ln -sf /opt/jdtls/bin/jdtls /usr/local/bin/jdtls; \
+    rm -f /tmp/jdtls.tar.gz; \
+    test -x /usr/local/bin/jdtls
+
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+      amd64) klsp_arch="x64" ;; \
+      arm64) klsp_arch="aarch64" ;; \
+      *) echo "Unsupported architecture: ${arch}"; exit 1 ;; \
+    esac; \
+    release_json="$(curl -fsSL https://api.github.com/repos/Kotlin/kotlin-lsp/releases/latest)"; \
+    klsp_url="$(printf '%s' "${release_json}" | sed -n 's/.*\(https:\/\/download-cdn\.jetbrains\.com\/kotlin-lsp\/[^"]*linux-'"${klsp_arch}"'\.zip\).*/\1/p' | head -n 1)"; \
+    if [ -z "${klsp_url}" ]; then echo "Could not resolve Kotlin LSP download URL"; exit 1; fi; \
+    curl -fsSL "${klsp_url}" -o /tmp/kotlin-lsp.zip; \
+    mkdir -p /opt/kotlin-lsp; \
+    unzip -q /tmp/kotlin-lsp.zip -d /opt/kotlin-lsp; \
+    chmod +x /opt/kotlin-lsp/kotlin-lsp.sh; \
+    ln -sf /opt/kotlin-lsp/kotlin-lsp.sh /usr/local/bin/kotlin-language-server; \
+    rm -f /tmp/kotlin-lsp.zip; \
+    timeout 5s kotlin-language-server --version || true
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN npm install -g \
     typescript \
     typescript-language-server \
-    jdtls \
-    kotlin-language-server \
     bash-language-server \
     yaml-language-server
 
 RUN go install golang.org/x/tools/gopls@latest \
-    && ln -sf "$(go env GOPATH)/bin/gopls" /usr/local/bin/gopls
+    && install -m 0755 "$(go env GOPATH)/bin/gopls" /usr/local/bin/gopls
 
 COPY --from=builder /build/capability_pb2.py /build/capability_pb2_grpc.py ./
 COPY server.py ./
