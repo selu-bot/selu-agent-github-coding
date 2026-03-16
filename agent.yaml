@@ -4,6 +4,7 @@ routing: delegate
 session:
   trigger: mention
   idle_timeout_minutes: 480
+  isolation: per_thread
 memory:
   policy: none
   top_k: 0

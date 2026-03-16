@@ -23,11 +23,15 @@ The coding flow is fixed:
 
 1. Checkout/open repository
 2. Create `feature-<slug>` branch
-3. Plan + clarifying questions
-4. Implement changes
-5. Commit changes
-6. Push (approval required)
-7. Create ready PR (approval required)
+3. Context discovery (repo map + behavior path tracing)
+4. Plan + clarifying questions
+5. Implement changes
+6. Commit changes
+7. Push (approval required)
+8. Create ready PR (approval required)
+
+The runtime policy is defined in `agent.md` and `capabilities/coding-github/prompt.md`.
+When working on a checked-out target repository, the agent must discover and obey that repository's `AGENTS.md` (if present).
 
 ## Credentials
 
