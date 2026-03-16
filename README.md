@@ -27,6 +27,10 @@ The coding flow is fixed:
 ## Credentials
 
 - `GITHUB_TOKEN` (user-scoped, required)
+- `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` (optional, for commit identity)
+- `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` (optional, for commit identity)
+  - Backward-compatible aliases are accepted in runtime config:
+    - `GITAUTHORNAME`, `GITAUTHOREMAIL`, `GITCOMMITTERNAME`, `GITCOMMITTER_EMAIL`, `GITCOMMITTEREMAIL`
 
 ## Approval defaults
 

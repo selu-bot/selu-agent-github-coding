@@ -116,6 +116,34 @@ def _clip(text: str, max_chars: int = MAX_TOOL_OUTPUT) -> str:
     return text[: max_chars - 3] + "..."
 
 
+def _first_non_empty(config: Dict[str, Any], keys: List[str]) -> str:
+    for key in keys:
+        value = str(config.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
+def _git_identity_from_config(config: Dict[str, Any]) -> Dict[str, str]:
+    author_name = _first_non_empty(config, ["GIT_AUTHOR_NAME", "GITAUTHORNAME"])
+    author_email = _first_non_empty(config, ["GIT_AUTHOR_EMAIL", "GITAUTHOREMAIL"])
+    committer_name = _first_non_empty(config, ["GIT_COMMITTER_NAME", "GITCOMMITTERNAME"])
+    committer_email = _first_non_empty(
+        config,
+        ["GIT_COMMITTER_EMAIL", "GITCOMMITTER_EMAIL", "GITCOMMITTEREMAIL"],
+    )
+    env: Dict[str, str] = {}
+    if author_name:
+        env["GIT_AUTHOR_NAME"] = author_name
+    if author_email:
+        env["GIT_AUTHOR_EMAIL"] = author_email
+    if committer_name:
+        env["GIT_COMMITTER_NAME"] = committer_name
+    if committer_email:
+        env["GIT_COMMITTER_EMAIL"] = committer_email
+    return env
+
+
 def _args_shape(args: Any) -> str:
     if not isinstance(args, dict):
         return f"type={type(args).__name__}"
@@ -239,6 +267,7 @@ def _run_git(
     git_args: List[str],
     token: str | None = None,
     timeout: int = 180,
+    extra_env: Dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["git"]
     if token:
@@ -249,6 +278,8 @@ def _run_git(
 
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
+    if extra_env:
+        env.update(extra_env)
     return _run_command(cmd, cwd=repo_root, env=env, timeout=timeout)
 
 
@@ -257,8 +288,9 @@ def _run_git_checked(
     git_args: List[str],
     token: str | None = None,
     timeout: int = 180,
+    extra_env: Dict[str, str] | None = None,
 ) -> str:
-    cp = _run_git(repo_root, git_args, token=token, timeout=timeout)
+    cp = _run_git(repo_root, git_args, token=token, timeout=timeout, extra_env=extra_env)
     if cp.returncode != 0:
         stderr = _clip((cp.stderr or "").strip())
         stdout = _clip((cp.stdout or "").strip())
@@ -1062,7 +1094,6 @@ def handle_git_diff(args: Dict[str, Any], config: Dict[str, Any], thread_id: str
 
 
 def handle_commit_changes(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
-    del config
     state = _repo_state_or_error(thread_id)
     repo_root = Path(state["repo_root"])
 
@@ -1080,7 +1111,17 @@ def handle_commit_changes(args: Dict[str, Any], config: Dict[str, Any], thread_i
     if diff_check.returncode not in (0, 1):
         raise ToolError("Could not evaluate staged changes.")
 
-    _run_git_checked(repo_root, ["commit", "-m", message])
+    identity_env = _git_identity_from_config(config)
+    git_user_name = identity_env.get("GIT_COMMITTER_NAME") or identity_env.get("GIT_AUTHOR_NAME")
+    git_user_email = identity_env.get("GIT_COMMITTER_EMAIL") or identity_env.get("GIT_AUTHOR_EMAIL")
+    commit_args = []
+    if git_user_name:
+        commit_args.extend(["-c", f"user.name={git_user_name}"])
+    if git_user_email:
+        commit_args.extend(["-c", f"user.email={git_user_email}"])
+    commit_args.extend(["commit", "-m", message])
+
+    _run_git_checked(repo_root, commit_args, extra_env=identity_env)
     commit_sha = _run_git_checked(repo_root, ["rev-parse", "HEAD"])
     branch = _current_branch(repo_root)
 
