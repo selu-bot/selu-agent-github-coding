@@ -93,6 +93,16 @@ tools:
     input_schema:
       type: object
       additionalProperties: false
+      oneOf:
+        - required:
+            - path
+            - content
+        - required:
+            - files
+        - required:
+            - path
+            - find
+            - replace
       properties:
         path:
           type: string
@@ -109,6 +119,7 @@ tools:
         files:
           type: array
           description: "Batch updates."
+          minItems: 1
           items:
             type: object
             properties:

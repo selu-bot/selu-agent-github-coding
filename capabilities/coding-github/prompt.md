@@ -32,10 +32,11 @@ You can use coding tools via `coding-github__*`.
 
 ## apply_patch contract
 
+- Every `coding-github__apply_patch` call must include arguments in exactly one valid shape.
 - Prefer focused edits with:
   `{"path":"...","find":"<exact old text>","replace":"<new text>"}`.
 - Full-file write is also valid for one file:
   `{"path":"...","content":"<full file text>"}`.
 - Batch full-file writes are valid:
   `{"files":[{"path":"...","content":"<full file text>"}]}`.
-- Never send path-only calls. Do not send patch hunks.
+- Never send `{}` or path-only calls. Do not send patch hunks.
