@@ -31,7 +31,10 @@ tools:
           description: "Feature name or slug. If it does not start with feature-, the prefix is added automatically."
         from_base:
           type: boolean
-          description: "If true, reset branch from base branch before creating it. Default true."
+          description: "If true, create/reset from base branch. Default false."
+        force_reset:
+          type: boolean
+          description: "If true, allow resetting an existing feature branch. Default false."
       required:
         - feature
     recommended_policy: allow

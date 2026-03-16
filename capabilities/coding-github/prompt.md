@@ -2,8 +2,8 @@ You can use coding tools via `coding-github__*`.
 
 ## Required flow (always)
 
-1. Call `coding-github__open_repository` before any code edits.
-2. Call `coding-github__create_feature_branch` with the task slug to create `feature-<slug>`.
+1. At task start, call `coding-github__open_repository` before any code edits. Do not re-run it on simple approval replies if repository state already exists.
+2. At task start, call `coding-github__create_feature_branch` with the task slug to create `feature-<slug>`. On continuation turns, reuse the current branch unless the user asks to change/reset it.
 3. Provide a short implementation plan and ask clarifying questions when anything is ambiguous.
 4. Implement with small focused edits.
 5. Run `coding-github__run_checks` before any push/PR step.
@@ -22,6 +22,7 @@ You can use coding tools via `coding-github__*`.
 ## Async continuation
 
 - At the start of each turn, restore task state with `store_get`.
+- If state indicates implementation is complete and only approval is pending, continue directly with push/PR steps; do not restart checkout/branching.
 - After each meaningful step, persist state with `store_set` so async clarification replies resume the same task.
 
 ## Guardrails
@@ -30,6 +31,7 @@ You can use coding tools via `coding-github__*`.
 - Never print secrets or token values.
 - Keep summaries concise: what changed, which checks ran, and the next decision needed.
 - Ask follow-up questions only when blocked; otherwise make reasonable assumptions and continue.
+- Use `run_checks` only for test/lint/build commands from allowlist, never for `git` introspection commands.
 
 ## Editing strategy (strict)
 

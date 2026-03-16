@@ -327,6 +327,31 @@ def _current_branch(repo_root: Path) -> str:
     return _run_git_checked(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"])
 
 
+def _local_branch_exists(repo_root: Path, branch: str) -> bool:
+    cp = _run_git(repo_root, ["show-ref", "--verify", f"refs/heads/{branch}"])
+    return cp.returncode == 0
+
+
+def _remote_branch_exists(repo_root: Path, branch: str, token: str | None = None) -> bool:
+    cp = _run_git(
+        repo_root,
+        ["ls-remote", "--heads", "origin", branch],
+        token=token,
+        timeout=120,
+    )
+    if cp.returncode != 0:
+        return False
+    return bool((cp.stdout or "").strip())
+
+
+def _commit_count_between(repo_root: Path, base: str, head: str) -> int:
+    out = _run_git_checked(repo_root, ["rev-list", "--count", f"{base}..{head}"])
+    try:
+        return int(out.strip())
+    except Exception:
+        raise ToolError(f"Failed to parse commit distance for {base}..{head}.")
+
+
 def _ensure_local_branch(repo_root: Path, branch: str) -> None:
     check = _run_git(repo_root, ["show-ref", "--verify", f"refs/heads/{branch}"])
     if check.returncode == 0:
@@ -583,9 +608,14 @@ def handle_open_repository(args: Dict[str, Any], config: Dict[str, Any], thread_
     else:
         repo_root = _safe_workspace_path(f"repos/{owner}__{repo}")
 
+    previous_branch = ""
     if repo_root.exists():
         if not (repo_root / ".git").exists():
             raise ToolError("Target directory exists but is not a git repository.")
+        try:
+            previous_branch = _current_branch(repo_root)
+        except Exception:
+            previous_branch = ""
         _run_git_checked(repo_root, ["fetch", "--all", "--prune"], token=token)
     else:
         repo_root.parent.mkdir(parents=True, exist_ok=True)
@@ -595,6 +625,10 @@ def handle_open_repository(args: Dict[str, Any], config: Dict[str, Any], thread_
     base_branch = _detect_default_branch(repo_root, token)
     _ensure_local_branch(repo_root, base_branch)
     _run_git(repo_root, ["pull", "--ff-only", "origin", base_branch], token=token, timeout=240)
+
+    # Preserve the previously active non-base branch across continuation turns.
+    if previous_branch and previous_branch != base_branch and _local_branch_exists(repo_root, previous_branch):
+        _run_git_checked(repo_root, ["checkout", previous_branch])
 
     current_branch = _current_branch(repo_root)
     status = _run_git_checked(repo_root, ["status", "--short", "--branch"])
@@ -634,15 +668,27 @@ def handle_create_feature_branch(args: Dict[str, Any], config: Dict[str, Any], t
     token = _require_token(config)
 
     branch_name = _slugify_feature(feature)
-    from_base = bool(args.get("from_base", True))
+    from_base = bool(args.get("from_base", False))
+    force_reset = bool(args.get("force_reset", False))
 
-    if from_base:
+    branch_exists_local = _local_branch_exists(repo_root, branch_name)
+    branch_exists_remote = _remote_branch_exists(repo_root, branch_name, token=token)
+
+    if (branch_exists_local or branch_exists_remote) and not force_reset:
+        if not branch_exists_local and branch_exists_remote:
+            _run_git_checked(repo_root, ["checkout", "-B", branch_name, f"origin/{branch_name}"])
+        else:
+            _run_git_checked(repo_root, ["checkout", branch_name])
+        reused_existing = True
+    elif from_base:
         base = str(state.get("base_branch") or _detect_default_branch(repo_root, token))
         _ensure_local_branch(repo_root, base)
         _run_git(repo_root, ["pull", "--ff-only", "origin", base], token=token, timeout=240)
         _run_git_checked(repo_root, ["checkout", "-B", branch_name, base])
+        reused_existing = False
     else:
         _run_git_checked(repo_root, ["checkout", "-B", branch_name])
+        reused_existing = False
 
     state["current_branch"] = branch_name
     set_thread_state(thread_id, state)
@@ -651,6 +697,9 @@ def handle_create_feature_branch(args: Dict[str, Any], config: Dict[str, Any], t
         "ok": True,
         "branch": branch_name,
         "base_branch": state.get("base_branch"),
+        "reused_existing_branch": reused_existing,
+        "from_base": from_base,
+        "force_reset": force_reset,
     }
 
 
@@ -1265,6 +1314,12 @@ def handle_create_pull_request(args: Dict[str, Any], config: Dict[str, Any], thr
     base = str(args.get("base", "")).strip() or str(state.get("base_branch", "main"))
     body = str(args.get("body", "")).strip()
     draft = bool(args.get("draft", False))
+
+    ahead_count = _commit_count_between(repo_root, base, head)
+    if ahead_count <= 0:
+        raise ToolError(
+            f"No commits between {base} and {head}. Ensure changes are committed on {head} and pushed before creating a PR."
+        )
 
     payload = {
         "title": title,
