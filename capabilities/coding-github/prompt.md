@@ -37,11 +37,13 @@ You can use coding tools via `coding-github__*`.
 
 - Prefer `coding-github__replace_in_file` for targeted edits:
   `{"path":"...","find":"<exact old text>","replace":"<new text>"}`.
-- Use `coding-github__write_file` for full-file rewrite:
+- Use `coding-github__write_file` only when creating a new file or when a full-file rewrite is unavoidable:
   `{"path":"...","content":"<full file text>"}`.
 - Use `coding-github__write_files` for batch full-file rewrites:
   `{"files":[{"path":"...","content":"<full file text>"}]}`.
 - Do not call `coding-github__apply_patch` unless explicitly requested by the user.
 - Never send empty tool arguments (`{}`), path-only edit calls, or patch-hunk text.
+- Before sending any edit tool call, verify the JSON object includes every required key with string values.
+- If an edit tool call fails because args are missing/invalid, immediately retry with a complete JSON object for the same tool.
 - Before any write, read the file first unless you are creating a new file.
 - After each edit, verify with `read_file` or `search_text` before moving on.

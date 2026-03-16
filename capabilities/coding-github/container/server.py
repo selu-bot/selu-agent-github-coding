@@ -922,7 +922,11 @@ def handle_write_file(args: Dict[str, Any], config: Dict[str, Any], thread_id: s
     path = args.get("path")
     content = args.get("content")
     if not isinstance(path, str) or not isinstance(content, str) or not path.strip():
-        raise ToolError("write_file requires string path and content.")
+        raise ToolError(
+            "write_file requires string path and content. "
+            'Example: {"path":"src/main.py","content":"<full file text>"}. '
+            f"Received {_args_shape(args)}."
+        )
     return handle_apply_patch({"path": path, "content": content}, {}, thread_id)
 
 
@@ -984,7 +988,11 @@ def handle_write_files(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
     del config
     files = args.get("files")
     if not isinstance(files, list) or not files:
-        raise ToolError("write_files requires a non-empty files array.")
+        raise ToolError(
+            "write_files requires a non-empty files array. "
+            'Example: {"files":[{"path":"src/main.py","content":"<full file text>"}]}. '
+            f"Received {_args_shape(args)}."
+        )
     return handle_apply_patch({"files": files}, {}, thread_id)
 
 

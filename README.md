@@ -12,6 +12,7 @@ Coding agent package for Selu that works with GitHub repositories.
   - `write_file` (`path`, `content`)
   - `replace_in_file` (`path`, `find`, `replace`, optional `replace_all`)
   - `write_files` (`files[]` batch full writes)
+  - Guardrail: edit calls must include all required arguments; retries should resend complete JSON, never `{}` or partial args
 - Runs allowlisted validation checks
 - Commits, pushes, and creates pull requests
 - Blocks PR creation by default when checks failed
