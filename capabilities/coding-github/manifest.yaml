@@ -371,10 +371,18 @@ network:
 filesystem: workspace
 
 credentials:
-  - name: GITHUB_TOKEN
+  - name: GITHUB_APP_ID
     scope: user
     required: true
-    description: "GitHub personal access token with repo and pull-request permissions"
+    description: "GitHub App ID (numeric)."
+  - name: GITHUB_APP_PRIVATE_KEY
+    scope: user
+    required: false
+    description: "GitHub App private key PEM text. Supports escaped newlines."
+  - name: GITHUB_APP_PRIVATE_KEY_BASE64
+    scope: user
+    required: false
+    description: "Base64-encoded GitHub App private key PEM. Use as an alternative to GITHUB_APP_PRIVATE_KEY."
   - name: GIT_AUTHOR_NAME
     scope: user
     required: false

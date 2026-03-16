@@ -11,12 +11,14 @@ import subprocess
 import threading
 import time
 from concurrent import futures
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import grpc
+import jwt
 
 import capability_pb2
 import capability_pb2_grpc
@@ -31,6 +33,7 @@ WORKSPACE_ROOT = Path(os.environ.get("SELU_WORKSPACE_ROOT", "/workspace")).resol
 STATE_FILE = WORKSPACE_ROOT / ".selu-coding" / "state.json"
 DEFAULT_THREAD_ID = "__default__"
 MAX_TOOL_OUTPUT = 12000
+GITHUB_API_VERSION = "2022-11-28"
 
 REPO_SHORTHAND_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REPO_URL_RE = re.compile(r"^https://github\\.com/([^/]+)/([^/]+?)(?:\\.git)?/?$")
@@ -107,6 +110,9 @@ PROJECT_MARKERS = {
 }
 
 state_lock = threading.Lock()
+auth_cache_lock = threading.Lock()
+installation_id_cache: Dict[str, int] = {}
+installation_token_cache: Dict[int, Dict[str, Any]] = {}
 
 
 class ToolError(Exception):
@@ -245,10 +251,160 @@ def _parse_repository(repository: str) -> tuple[str, str]:
     )
 
 
-def _require_token(config: Dict[str, Any]) -> str:
-    token = str(config.get("GITHUB_TOKEN", "")).strip()
+def _require_app_id(config: Dict[str, Any]) -> str:
+    app_id = str(config.get("GITHUB_APP_ID", "")).strip()
+    if not app_id:
+        raise ToolError("Missing required credential: GITHUB_APP_ID")
+    return app_id
+
+
+def _require_app_private_key(config: Dict[str, Any]) -> str:
+    private_key = str(config.get("GITHUB_APP_PRIVATE_KEY", "")).strip()
+    if private_key:
+        # Support one-line env-style PEM values with escaped newlines.
+        if "\\n" in private_key and "\n" not in private_key:
+            private_key = private_key.replace("\\n", "\n")
+        return private_key
+
+    private_key_b64 = str(config.get("GITHUB_APP_PRIVATE_KEY_BASE64", "")).strip()
+    if private_key_b64:
+        try:
+            decoded = base64.b64decode(private_key_b64).decode("utf-8")
+        except Exception as exc:
+            raise ToolError(f"Invalid GITHUB_APP_PRIVATE_KEY_BASE64: {exc}") from exc
+        return decoded
+
+    raise ToolError(
+        "Missing required credential: GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_BASE64"
+    )
+
+
+def _build_app_jwt(app_id: str, private_key: str) -> str:
+    now = int(time.time())
+    payload = {
+        "iat": now - 60,
+        "exp": now + (9 * 60),
+        "iss": app_id,
+    }
+    token = jwt.encode(payload, private_key, algorithm="RS256")
+    if isinstance(token, bytes):
+        return token.decode("utf-8")
+    return token
+
+
+def _github_api_json(
+    *,
+    url: str,
+    method: str,
+    bearer_token: str,
+    payload: Dict[str, Any] | None = None,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    data: bytes | None = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+
+    req = Request(url=url, data=data, method=method)
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Authorization", f"Bearer {bearer_token}")
+    req.add_header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+    if payload is not None:
+        req.add_header("Content-Type", "application/json")
+
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")[:2000]
+        raise ToolError(f"GitHub API error {exc.code}: {_clip(body_text, 1200)}")
+    except URLError as exc:
+        raise ToolError(f"Network error calling GitHub API: {exc}")
+
+    if not raw.strip():
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ToolError(f"GitHub API returned invalid JSON: {exc}") from exc
+    if not isinstance(decoded, dict):
+        raise ToolError("GitHub API returned unexpected response shape.")
+    return decoded
+
+
+def _parse_iso_utc(iso_value: str) -> int | None:
+    value = (iso_value or "").strip()
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return int(dt.astimezone(timezone.utc).timestamp())
+    except Exception:
+        return None
+
+
+def _owner_repo_from_state(state: Dict[str, Any]) -> tuple[str, str]:
+    owner = str(state.get("owner", "")).strip()
+    repo = str(state.get("repo", "")).strip()
+    if not owner or not repo:
+        raise ToolError("Repository owner/repo is missing. Run open_repository again.")
+    return owner, repo
+
+
+def _repo_key(owner: str, repo: str) -> str:
+    return f"{owner}/{repo}".lower()
+
+
+def _installation_id_for_repo(owner: str, repo: str, app_jwt: str) -> int:
+    key = _repo_key(owner, repo)
+    with auth_cache_lock:
+        cached = installation_id_cache.get(key)
+    if cached:
+        return cached
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/installation"
+    data = _github_api_json(url=url, method="GET", bearer_token=app_jwt)
+    installation_id = int(data.get("id", 0))
+    if installation_id <= 0:
+        raise ToolError(
+            f"Could not resolve GitHub App installation for {owner}/{repo}. "
+            "Ensure the app is installed for that repository."
+        )
+
+    with auth_cache_lock:
+        installation_id_cache[key] = installation_id
+    return installation_id
+
+
+def _installation_access_token(config: Dict[str, Any], owner: str, repo: str) -> str:
+    app_id = _require_app_id(config)
+    private_key = _require_app_private_key(config)
+    app_jwt = _build_app_jwt(app_id, private_key)
+    installation_id = _installation_id_for_repo(owner, repo, app_jwt)
+    now = int(time.time())
+
+    with auth_cache_lock:
+        cached = installation_token_cache.get(installation_id)
+        if cached:
+            token = str(cached.get("token", "")).strip()
+            expires_at = int(cached.get("expires_at", 0))
+            if token and expires_at - 60 > now:
+                return token
+
+    url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
+    data = _github_api_json(url=url, method="POST", bearer_token=app_jwt, payload={})
+    token = str(data.get("token", "")).strip()
     if not token:
-        raise ToolError("Missing required credential: GITHUB_TOKEN")
+        raise ToolError("GitHub App did not return an installation access token.")
+
+    expires_at = _parse_iso_utc(str(data.get("expires_at", "")))
+    if expires_at is None:
+        expires_at = now + 300
+
+    with auth_cache_lock:
+        installation_token_cache[installation_id] = {
+            "token": token,
+            "expires_at": expires_at,
+        }
     return token
 
 
@@ -278,7 +434,7 @@ def _run_git(
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["git"]
     if token:
-        # GitHub git-over-https expects Basic auth; PAT in Bearer header may be ignored.
+        # GitHub git-over-https expects Basic auth with x-access-token username.
         basic = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
         cmd.extend(["-c", f"http.extraHeader=Authorization: Basic {basic}"])
     cmd.extend(git_args)
@@ -599,8 +755,8 @@ def handle_open_repository(args: Dict[str, Any], config: Dict[str, Any], thread_
     if not repository:
         raise ToolError("open_repository requires 'repository'.")
 
-    token = _require_token(config)
     owner, repo = _parse_repository(repository)
+    token = _installation_access_token(config, owner, repo)
 
     directory = str(args.get("directory", "")).strip()
     if directory:
@@ -665,7 +821,8 @@ def handle_create_feature_branch(args: Dict[str, Any], config: Dict[str, Any], t
 
     state = _repo_state_or_error(thread_id)
     repo_root = Path(state["repo_root"])
-    token = _require_token(config)
+    owner, repo = _owner_repo_from_state(state)
+    token = _installation_access_token(config, owner, repo)
 
     branch_name = _slugify_feature(feature)
     from_base = bool(args.get("from_base", False))
@@ -1274,8 +1431,9 @@ def handle_commit_changes(args: Dict[str, Any], config: Dict[str, Any], thread_i
 
 
 def handle_push_branch(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
-    token = _require_token(config)
     state = _repo_state_or_error(thread_id)
+    owner, repo = _owner_repo_from_state(state)
+    token = _installation_access_token(config, owner, repo)
     repo_root = Path(state["repo_root"])
 
     remote = str(args.get("remote", "origin")).strip() or "origin"
@@ -1294,13 +1452,9 @@ def handle_push_branch(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
 
 
 def handle_create_pull_request(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
-    token = _require_token(config)
     state = _repo_state_or_error(thread_id)
-
-    owner = str(state.get("owner", "")).strip()
-    repo = str(state.get("repo", "")).strip()
-    if not owner or not repo:
-        raise ToolError("Repository owner/repo is missing. Run open_repository again.")
+    owner, repo = _owner_repo_from_state(state)
+    token = _installation_access_token(config, owner, repo)
 
     title = str(args.get("title", "")).strip()
     if not title:
@@ -1338,21 +1492,7 @@ def handle_create_pull_request(args: Dict[str, Any], config: Dict[str, Any], thr
     }
 
     url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
-    req = Request(url=url, data=json.dumps(payload).encode("utf-8"), method="POST")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("Content-Type", "application/json")
-
-    try:
-        with urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-            data = json.loads(raw)
-    except HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")[:2000]
-        raise ToolError(f"GitHub API error {exc.code}: {_clip(body_text, 1200)}")
-    except URLError as exc:
-        raise ToolError(f"Network error creating PR: {exc}")
+    data = _github_api_json(url=url, method="POST", bearer_token=token, payload=payload, timeout=30)
 
     state["last_pr"] = {
         "number": data.get("number"),
