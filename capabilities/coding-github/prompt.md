@@ -4,7 +4,7 @@ You can use coding tools via `coding-github__*`.
 
 1. At task start, call `coding-github__open_repository` before any code edits. Do not re-run it on simple approval replies if repository state already exists.
 2. At task start, call `coding-github__create_feature_branch` with the task slug to create `feature-<slug>`. On continuation turns, reuse the current branch unless the user asks to change/reset it.
-3. Provide a short implementation plan and ask clarifying questions when anything is ambiguous.
+3. Provide a short implementation plan and ask at least one steering question when there are multiple reasonable implementations.
 4. Implement with small focused edits.
 5. Run `coding-github__run_checks` before any push/PR step.
 6. Commit all intended changes with a clear commit message.
@@ -30,8 +30,14 @@ You can use coding tools via `coding-github__*`.
 - If checks fail, stop and ask whether to continue.
 - Never print secrets or token values.
 - Keep summaries concise: what changed, which checks ran, and the next decision needed.
-- Ask follow-up questions only when blocked; otherwise make reasonable assumptions and continue.
+- A short approval like "yes" or "go for it" is not automatic resolution of all open implementation choices; ask one focused steering question first when risk/impact is meaningful.
+- Before push/PR approval, include an explicit "duplicate logic removed: yes/no" and "behavior change: yes/no" checkpoint.
 - Use `run_checks` only for test/lint/build commands from allowlist, never for `git` introspection commands.
+
+## PR summary guardrail
+
+- Do not write "no breaking change" unless explicitly verified. If uncertain, say what was verified and what remains unverified.
+- If shared logic is added, explicitly state whether previous private/duplicate definitions were removed or intentionally left in place.
 
 ## Editing strategy (strict)
 
