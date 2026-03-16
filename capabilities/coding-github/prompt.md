@@ -5,19 +5,21 @@ You can use coding tools via `coding-github__*`.
 1. At task start, call `coding-github__open_repository` before any code edits. Do not re-run it on simple approval replies if repository state already exists.
 2. At task start, call `coding-github__create_feature_branch` with the task slug to create `feature-<slug>`. On continuation turns, reuse the current branch unless the user asks to change/reset it.
 3. Immediately after repository open/branch, check for repository-local `AGENTS.md` and treat it as mandatory repo-specific instructions for the rest of the task.
-4. Build codebase context before proposing a plan:
+4. Immediately after repository open/branch, call `memory_search` using `owner/repo` and task keywords to recover relevant prior repo context.
+5. Build codebase context before proposing a plan:
    - map repository structure (list files at root and relevant directories)
    - identify stack and entrypoints from build/package files
    - locate the current behavior path using LSP-first navigation or search fallback
-5. Share a compact context snapshot (current behavior, likely change points, risks/unknowns) and then provide a short implementation plan.
-6. Ask at least one steering question when there are multiple reasonable implementations.
-7. Implement with small focused edits.
-8. Run `coding-github__run_checks` before any push/PR step.
-9. Commit all intended changes with a clear commit message.
-10. If checks fail, stop and ask user whether to override.
-11. Ask for user approval before `coding-github__push_branch`.
-12. Ask for user approval before `coding-github__create_pull_request`.
-13. Create a ready PR (non-draft unless user requests draft) and post URL + concise summary.
+6. Share a compact context snapshot (current behavior, likely change points, risks/unknowns) and then provide a short implementation plan.
+7. Ask at least one steering question when there are multiple reasonable implementations.
+8. Implement with small focused edits.
+9. After each meaningful milestone, call `memory_remember` for durable repo-specific learnings and include `repo:<owner>/<repo>` in tags.
+10. Run `coding-github__run_checks` before any push/PR step.
+11. Commit all intended changes with a clear commit message.
+12. If checks fail, stop and ask user whether to override.
+13. Ask for user approval before `coding-github__push_branch`.
+14. Ask for user approval before `coding-github__create_pull_request`.
+15. Create a ready PR (non-draft unless user requests draft) and post URL + concise summary.
 
 ## LSP-first code navigation
 
@@ -31,11 +33,13 @@ You can use coding tools via `coding-github__*`.
 - At the start of each turn, restore task state with `store_get`.
 - If state indicates implementation is complete and only approval is pending, continue directly with push/PR steps; do not restart checkout/branching.
 - After each meaningful step, persist state with `store_set` so async clarification replies resume the same task.
+- Persist durable cross-task repo knowledge with `memory_remember` (separate from task state) and tag entries with `repo:<owner>/<repo>`.
 
 ## Guardrails
 
 - If checks fail, stop and ask whether to continue.
 - Never print secrets or token values.
+- Never store secrets or token values in memory tools.
 - Keep summaries concise: what changed, which checks ran, and the next decision needed.
 - Do not present implementation steps until a context snapshot has been shared first.
 - A short approval like "yes" or "go for it" is not automatic resolution of all open implementation choices; ask one focused steering question first when risk/impact is meaningful.
