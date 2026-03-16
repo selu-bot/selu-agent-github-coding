@@ -86,40 +86,96 @@ tools:
         - query
     recommended_policy: allow
 
-  - name: apply_patch
+  - name: write_file
     description: >
-      Apply structured file edits.
-      Supports path+find+replace for focused edits, path+content for full-file write, or files[] for batch full-file writes.
+      Write a full file in one call. Creates parent directories when needed.
     input_schema:
       type: object
       additionalProperties: false
-      oneOf:
-        - required:
-            - path
-            - content
-        - required:
-            - files
-        - required:
-            - path
-            - find
-            - replace
       properties:
         path:
           type: string
-          description: "Single repository-relative file path."
-        find:
-          type: string
-          description: "Exact text to find in the target file (single-match required)."
-        replace:
-          type: string
-          description: "Replacement text used with find."
+          description: "Repository-relative file path."
         content:
           type: string
-          description: "Full replacement content for the single file."
+          description: "Full replacement file content."
+      required:
+        - path
+        - content
+    recommended_policy: allow
+
+  - name: replace_in_file
+    description: >
+      Replace exact text in a file. By default requires exactly one match.
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          description: "Repository-relative file path."
+        find:
+          type: string
+          description: "Exact text to find in the file."
+        replace:
+          type: string
+          description: "Replacement text."
+        replace_all:
+          type: boolean
+          description: "If true, replace all matches. Default false."
+      required:
+        - path
+        - find
+        - replace
+    recommended_policy: allow
+
+  - name: write_files
+    description: >
+      Batch full-file writes in a single call.
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
         files:
           type: array
-          description: "Batch updates."
           minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              path:
+                type: string
+              content:
+                type: string
+            required:
+              - path
+              - content
+      required:
+        - files
+    recommended_policy: allow
+
+  - name: apply_patch
+    description: >
+      Backward-compatible full-file write. Prefer write_file/replace_in_file/write_files for new calls.
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          description: "Repository-relative file path."
+        find:
+          type: string
+          description: "Deprecated. Use replace_in_file."
+        replace:
+          type: string
+          description: "Deprecated. Use replace_in_file."
+        content:
+          type: string
+          description: "Full replacement content for the file."
+        files:
+          type: array
+          description: "Deprecated. Use write_files."
           items:
             type: object
             properties:
@@ -131,7 +187,9 @@ tools:
               - path
               - content
             additionalProperties: false
-      required: []
+      required:
+        - path
+        - content
     recommended_policy: allow
 
   - name: run_checks

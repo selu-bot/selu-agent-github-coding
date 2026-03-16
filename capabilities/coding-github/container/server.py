@@ -40,6 +40,9 @@ TOOL_PRIMARY_PARAM = {
     "create_feature_branch": "feature",
     "read_file": "path",
     "search_text": "query",
+    "write_file": "path",
+    "replace_in_file": "path",
+    "write_files": "files",
     "lsp_definition": "path",
     "lsp_references": "path",
     "commit_changes": "message",
@@ -151,6 +154,10 @@ def _args_shape(args: Any) -> str:
     parts = [f"keys={keys}"]
     if isinstance(args.get("path"), str):
         parts.append(f"path_len={len(args['path'])}")
+    if isinstance(args.get("find"), str):
+        parts.append(f"find_len={len(args['find'])}")
+    if isinstance(args.get("replace"), str):
+        parts.append(f"replace_len={len(args['replace'])}")
     if isinstance(args.get("content"), str):
         parts.append(f"content_len={len(args['content'])}")
     files = args.get("files")
@@ -807,6 +814,7 @@ def handle_apply_patch(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
             '{"files":[{"path":"repo/file","content":"<full file text>"}]} '
             "or "
             '{"path":"repo/file","find":"<exact old text>","replace":"<new text>"}. '
+            "Prefer write_file/replace_in_file/write_files for new calls. "
             f"Received {_args_shape(args)}."
         )
 
@@ -858,6 +866,77 @@ def handle_apply_patch(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
         "changed_count": len(changed),
         "mode": mode,
     }
+
+
+def handle_write_file(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
+    del config
+    path = args.get("path")
+    content = args.get("content")
+    if not isinstance(path, str) or not isinstance(content, str) or not path.strip():
+        raise ToolError("write_file requires string path and content.")
+    return handle_apply_patch({"path": path, "content": content}, {}, thread_id)
+
+
+def handle_replace_in_file(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
+    del config
+    state = _repo_state_or_error(thread_id)
+    repo_root = Path(state["repo_root"])
+
+    path = args.get("path")
+    find = args.get("find")
+    replace = args.get("replace")
+    replace_all = bool(args.get("replace_all", False))
+
+    if not isinstance(path, str) or not path.strip():
+        raise ToolError("replace_in_file requires a non-empty string path.")
+    if not isinstance(find, str) or not find:
+        raise ToolError("replace_in_file requires a non-empty string find.")
+    if not isinstance(replace, str):
+        raise ToolError("replace_in_file requires string replace.")
+
+    target = _safe_repo_path(repo_root, path)
+    if not target.exists() or not target.is_file():
+        raise ToolError(f"File does not exist: {path}")
+
+    old = target.read_text(encoding="utf-8")
+    count = old.count(find)
+    if count == 0:
+        raise ToolError(f"find text was not found in file: {path}")
+    if count > 1 and not replace_all:
+        raise ToolError(
+            f"find text matches {count} locations in {path}; set replace_all=true or provide a more specific snippet."
+        )
+
+    if replace_all:
+        new_content = old.replace(find, replace)
+        replaced_count = count
+    else:
+        new_content = old.replace(find, replace, 1)
+        replaced_count = 1
+
+    if new_content == old:
+        changed_files: List[str] = []
+    else:
+        target.write_text(new_content, encoding="utf-8")
+        changed_files = [target.relative_to(repo_root).as_posix()]
+
+    return {
+        "ok": True,
+        "changed_files": changed_files,
+        "changed_count": len(changed_files),
+        "mode": "replace_in_file",
+        "matches_found": count,
+        "replaced_count": replaced_count,
+        "replace_all": replace_all,
+    }
+
+
+def handle_write_files(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
+    del config
+    files = args.get("files")
+    if not isinstance(files, list) or not files:
+        raise ToolError("write_files requires a non-empty files array.")
+    return handle_apply_patch({"files": files}, {}, thread_id)
 
 
 def handle_run_checks(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
@@ -1237,6 +1316,9 @@ TOOL_HANDLERS = {
     "list_files": handle_list_files,
     "read_file": handle_read_file,
     "search_text": handle_search_text,
+    "write_file": handle_write_file,
+    "replace_in_file": handle_replace_in_file,
+    "write_files": handle_write_files,
     "apply_patch": handle_apply_patch,
     "run_checks": handle_run_checks,
     "lsp_probe": handle_lsp_probe,

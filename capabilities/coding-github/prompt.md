@@ -29,14 +29,17 @@ You can use coding tools via `coding-github__*`.
 - If checks fail, stop and ask whether to continue.
 - Never print secrets or token values.
 - Keep summaries concise: what changed, which checks ran, and the next decision needed.
+- Ask follow-up questions only when blocked; otherwise make reasonable assumptions and continue.
 
-## apply_patch contract
+## Editing strategy (strict)
 
-- Every `coding-github__apply_patch` call must include arguments in exactly one valid shape.
-- Prefer focused edits with:
+- Prefer `coding-github__replace_in_file` for targeted edits:
   `{"path":"...","find":"<exact old text>","replace":"<new text>"}`.
-- Full-file write is also valid for one file:
+- Use `coding-github__write_file` for full-file rewrite:
   `{"path":"...","content":"<full file text>"}`.
-- Batch full-file writes are valid:
+- Use `coding-github__write_files` for batch full-file rewrites:
   `{"files":[{"path":"...","content":"<full file text>"}]}`.
-- Never send `{}` or path-only calls. Do not send patch hunks.
+- Do not call `coding-github__apply_patch` unless explicitly requested by the user.
+- Never send empty tool arguments (`{}`), path-only edit calls, or patch-hunk text.
+- Before any write, read the file first unless you are creating a new file.
+- After each edit, verify with `read_file` or `search_text` before moving on.

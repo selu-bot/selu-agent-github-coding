@@ -8,6 +8,10 @@ Coding agent package for Selu that works with GitHub repositories.
 - Creates `feature-...` branches
 - Uses LSP navigation (`probe`, `definition`, `references`) for more precise edits
 - Reads/searches/edits files in a workspace
+- Deterministic edit tools:
+  - `write_file` (`path`, `content`)
+  - `replace_in_file` (`path`, `find`, `replace`, optional `replace_all`)
+  - `write_files` (`files[]` batch full writes)
 - Runs allowlisted validation checks
 - Commits, pushes, and creates pull requests
 - Blocks PR creation by default when checks failed
