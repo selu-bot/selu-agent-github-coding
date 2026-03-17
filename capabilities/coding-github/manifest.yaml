@@ -197,7 +197,7 @@ tools:
 
   - name: run_checks
     description: >
-      Run allowlisted validation commands (for example tests, lint, build) and return results.
+      Run validation commands that are currently available for this repository/toolchain.
     input_schema:
       type: object
       properties:
@@ -205,12 +205,61 @@ tools:
           type: array
           items:
             type: string
-          description: "Commands to run. Every command must be in the check allowlist."
+          description: "Optional commands to run. If omitted, all currently available checks are run."
         stop_on_failure:
           type: boolean
           description: "Stop after first failed command. Default true."
+      required: []
+    recommended_policy: allow
+
+  - name: list_checks
+    description: >
+      List checks that are currently runnable (and why others are unavailable) for the active repository.
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+    recommended_policy: allow
+
+  - name: install_toolchain
+    description: >
+      Install additional user-space tooling in the capability container using a restricted package manager allowlist.
+    input_schema:
+      type: object
+      properties:
+        manager:
+          type: string
+          description: "Installer to use: npm, pip, cargo, go."
+        packages:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: "Packages/modules to install."
+        global:
+          type: boolean
+          description: "Kept for compatibility; installs are always user-space. Default true."
       required:
-        - commands
+        - manager
+        - packages
+    recommended_policy: allow
+
+  - name: toolchain_probe
+    description: >
+      Inspect runtime toolchain status: binaries, user-space install roots, allowlisted installers/packages, and runnable checks.
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+    recommended_policy: allow
+
+  - name: metrics_report
+    description: >
+      Show per-thread runtime metrics (LSP usage, fallbacks, and check outcomes).
+    input_schema:
+      type: object
+      properties: {}
+      required: []
     recommended_policy: allow
 
   - name: lsp_probe
@@ -239,7 +288,7 @@ tools:
           description: "0-based character position in line."
         language:
           type: string
-          description: "Optional language override (rust, python, go, typescript, javascript, java, kotlin)."
+          description: "Optional language override (rust, python, go, typescript, javascript, java, kotlin, bash, yaml)."
       required:
         - path
         - line
@@ -263,7 +312,7 @@ tools:
           description: "0-based character position in line."
         language:
           type: string
-          description: "Optional language override (rust, python, go, typescript, javascript, java, kotlin)."
+          description: "Optional language override (rust, python, go, typescript, javascript, java, kotlin, bash, yaml)."
         include_declaration:
           type: boolean
           description: "Include declaration in returned references. Default false."

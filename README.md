@@ -13,7 +13,9 @@ Coding agent package for Selu that works with GitHub repositories.
   - `replace_in_file` (`path`, `find`, `replace`, optional `replace_all`)
   - `write_files` (`files[]` batch full writes)
   - Guardrail: edit calls must include all required arguments; retries should resend complete JSON, never `{}` or partial args
-- Runs allowlisted validation checks
+- Detects and runs repository/toolchain-aware checks (`list_checks` + `run_checks`)
+- Can install missing user-space toolchain pieces via `install_toolchain` (`npm`, `pip`, `cargo`, `go`) with audit logging
+- Exposes `toolchain_probe` to inspect binaries, tool roots, allowlists, and currently runnable checks
 - Commits, pushes, and creates pull requests
 - Blocks PR creation by default when checks failed
 
@@ -58,3 +60,5 @@ When working on a checked-out target repository, the agent must discover and obe
 - Included by default: Python (`pylsp`)
 - Included in the container image: Rust (`rust-analyzer`), Go (`gopls`), TypeScript/JavaScript (`typescript-language-server`), Java (`jdtls`), Kotlin (`kotlin-language-server`)
 - Also included for scripting/config repos: Bash (`bash-language-server`), YAML (`yaml-language-server`)
+- Runtime logs include LSP probe/definition/references attempt, success, and failure events.
+- Per-thread metrics are available via `metrics_report` (LSP usage/failures, search fallbacks, check pass/fail counts).

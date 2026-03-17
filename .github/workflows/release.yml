@@ -83,6 +83,17 @@ jobs:
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:latest
 
+      - name: Verify required binaries in released image
+        run: |
+          image_ref="${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}"
+          docker pull "${image_ref}"
+          docker run --rm "${image_ref}" /bin/sh -lc '
+            set -eu
+            for bin in git rg python3 rust-analyzer gopls typescript-language-server bash-language-server yaml-language-server; do
+              command -v "$bin" >/dev/null 2>&1 || { echo "Missing required binary: $bin"; exit 1; }
+            done
+          '
+
       # -- Create agent archive --
 
       - name: Update manifest with GHCR image reference

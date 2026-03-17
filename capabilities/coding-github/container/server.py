@@ -48,33 +48,10 @@ TOOL_PRIMARY_PARAM = {
     "write_files": "files",
     "lsp_definition": "path",
     "lsp_references": "path",
+    "install_toolchain": "manager",
     "commit_changes": "message",
     "create_pull_request": "title",
 }
-
-CHECK_COMMAND_ALLOWLIST = [
-    "cargo test",
-    "cargo check",
-    "cargo fmt --check",
-    "cargo clippy",
-    "npm test",
-    "npm run test",
-    "npm run lint",
-    "npm run build",
-    "pnpm test",
-    "pnpm lint",
-    "pnpm build",
-    "yarn test",
-    "yarn lint",
-    "yarn build",
-    "pytest",
-    "ruff check",
-    "mypy",
-    "go test",
-    "make test",
-    "make lint",
-    "make build",
-]
 
 LSP_SERVER_BY_LANGUAGE = {
     "rust": ["rust-analyzer"],
@@ -84,6 +61,8 @@ LSP_SERVER_BY_LANGUAGE = {
     "javascript": ["typescript-language-server", "--stdio"],
     "java": ["jdtls"],
     "kotlin": ["kotlin-language-server"],
+    "bash": ["bash-language-server", "start"],
+    "yaml": ["yaml-language-server", "--stdio"],
 }
 
 LANGUAGE_IDS_BY_EXTENSION = {
@@ -97,6 +76,11 @@ LANGUAGE_IDS_BY_EXTENSION = {
     ".java": "java",
     ".kt": "kotlin",
     ".kts": "kotlin",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".yaml": "yaml",
+    ".yml": "yaml",
 }
 
 PROJECT_MARKERS = {
@@ -107,7 +91,77 @@ PROJECT_MARKERS = {
     "javascript": ["package.json"],
     "java": ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
     "kotlin": ["build.gradle.kts", "settings.gradle.kts", "pom.xml"],
+    "bash": [".bashrc", ".bash_profile"],
+    "yaml": ["docker-compose.yml", "docker-compose.yaml"],
 }
+
+TOOLCHAIN_INSTALLERS = {"npm", "pip", "cargo", "go"}
+TOOLCHAIN_PACKAGE_RE = re.compile(r"^[A-Za-z0-9@._+:/=-]+$")
+MAX_INSTALL_PACKAGES_PER_CALL = 10
+INSTALL_AUDIT_FILE = WORKSPACE_ROOT / ".selu-coding" / "install_audit.jsonl"
+TOOLCHAIN_ROOT = WORKSPACE_ROOT / ".selu-tools"
+
+TOOLCHAIN_PACKAGE_ALLOWLIST = {
+    "npm": {
+        "typescript",
+        "typescript-language-server",
+        "bash-language-server",
+        "yaml-language-server",
+        "eslint",
+        "prettier",
+        "pnpm",
+        "yarn",
+        "@biomejs/biome",
+    },
+    "pip": {
+        "pytest",
+        "ruff",
+        "mypy",
+        "black",
+        "pylint",
+        "python-lsp-server",
+        "poetry",
+        "pipx",
+    },
+    "cargo": {
+        "cargo-edit",
+        "cargo-nextest",
+        "cargo-watch",
+        "cargo-audit",
+        "cargo-deny",
+        "cargo-outdated",
+        "cargo-expand",
+    },
+    "go": {
+        "golang.org/x/tools/gopls@latest",
+        "honnef.co/go/tools/cmd/staticcheck@latest",
+        "github.com/golangci/golangci-lint/cmd/golangci-lint@latest",
+    },
+}
+
+CHECK_SPECS: List[Dict[str, Any]] = [
+    {"command": "cargo test", "binaries": ["cargo"], "markers": ["Cargo.toml"]},
+    {"command": "cargo check", "binaries": ["cargo"], "markers": ["Cargo.toml"]},
+    {"command": "cargo fmt --check", "binaries": ["cargo"], "markers": ["Cargo.toml"]},
+    {"command": "cargo clippy", "binaries": ["cargo"], "markers": ["Cargo.toml"]},
+    {"command": "npm test", "binaries": ["npm"], "markers": ["package.json"]},
+    {"command": "npm run test", "binaries": ["npm"], "markers": ["package.json"], "script": "test"},
+    {"command": "npm run lint", "binaries": ["npm"], "markers": ["package.json"], "script": "lint"},
+    {"command": "npm run build", "binaries": ["npm"], "markers": ["package.json"], "script": "build"},
+    {"command": "pnpm test", "binaries": ["pnpm"], "markers": ["package.json"]},
+    {"command": "pnpm lint", "binaries": ["pnpm"], "markers": ["package.json"]},
+    {"command": "pnpm build", "binaries": ["pnpm"], "markers": ["package.json"]},
+    {"command": "yarn test", "binaries": ["yarn"], "markers": ["package.json"]},
+    {"command": "yarn lint", "binaries": ["yarn"], "markers": ["package.json"]},
+    {"command": "yarn build", "binaries": ["yarn"], "markers": ["package.json"]},
+    {"command": "pytest", "binaries": ["pytest"], "markers_any": ["pyproject.toml", "setup.py", "requirements.txt"]},
+    {"command": "ruff check", "binaries": ["ruff"], "markers_any": ["pyproject.toml", "requirements.txt"]},
+    {"command": "mypy", "binaries": ["mypy"], "markers_any": ["pyproject.toml", "mypy.ini"]},
+    {"command": "go test", "binaries": ["go"], "markers": ["go.mod"]},
+    {"command": "make test", "binaries": ["make"], "markers_any": ["Makefile", "makefile"]},
+    {"command": "make lint", "binaries": ["make"], "markers_any": ["Makefile", "makefile"]},
+    {"command": "make build", "binaries": ["make"], "markers_any": ["Makefile", "makefile"]},
+]
 
 state_lock = threading.Lock()
 auth_cache_lock = threading.Lock()
@@ -548,11 +602,118 @@ def _is_allowed_check_command(cmd: str) -> bool:
     if any(token in cmd for token in banned):
         return False
 
-    stripped = cmd.strip()
-    return any(
-        stripped == allowed or stripped.startswith(f"{allowed} ")
-        for allowed in CHECK_COMMAND_ALLOWLIST
-    )
+    return True
+
+
+def _validate_toolchain_packages(manager: str, packages: Any) -> List[str]:
+    if not isinstance(packages, list) or not packages:
+        raise ToolError("install_toolchain requires a non-empty packages array.")
+    if len(packages) > MAX_INSTALL_PACKAGES_PER_CALL:
+        raise ToolError(f"At most {MAX_INSTALL_PACKAGES_PER_CALL} packages are allowed per install call.")
+    cleaned: List[str] = []
+    allowlist = TOOLCHAIN_PACKAGE_ALLOWLIST.get(manager, set())
+    for raw in packages:
+        if not isinstance(raw, str):
+            raise ToolError("Each package must be a string.")
+        pkg = raw.strip()
+        if not pkg:
+            raise ToolError("Package names must not be empty.")
+        if not TOOLCHAIN_PACKAGE_RE.match(pkg):
+            raise ToolError(f"Invalid package name: {pkg}")
+        if pkg not in allowlist:
+            raise ToolError(f"Package is not allowlisted for {manager}: {pkg}")
+        cleaned.append(pkg)
+    return cleaned
+
+
+def _command_exists(binary: str) -> bool:
+    return _run_command(["which", binary]).returncode == 0
+
+
+def _lsp_log(event: str, thread_id: str, **fields: Any) -> None:
+    rendered = " ".join(f"{k}={v}" for k, v in fields.items())
+    log.info("LSP event=%s thread_id=%s %s", event, thread_id, rendered)
+
+
+def _append_install_audit(entry: Dict[str, Any]) -> None:
+    INSTALL_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with INSTALL_AUDIT_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _bump_metric(state: Dict[str, Any], key: str, amount: int = 1) -> None:
+    metrics = state.setdefault("metrics", {})
+    value = int(metrics.get(key, 0))
+    metrics[key] = value + amount
+
+
+def _record_check_metric(state: Dict[str, Any], command: str, exit_code: int) -> None:
+    metrics = state.setdefault("metrics", {})
+    checks = metrics.setdefault("checks", {})
+    item = checks.setdefault(command, {"pass": 0, "fail": 0})
+    if exit_code == 0:
+        item["pass"] = int(item.get("pass", 0)) + 1
+    else:
+        item["fail"] = int(item.get("fail", 0)) + 1
+
+
+def _read_package_json(repo_root: Path) -> Dict[str, Any]:
+    target = repo_root / "package.json"
+    if not target.exists() or not target.is_file():
+        return {}
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return raw
+    except Exception:
+        return {}
+    return {}
+
+
+def _check_spec_reason(repo_root: Path, spec: Dict[str, Any], package_json: Dict[str, Any]) -> str | None:
+    missing_bins = [b for b in spec.get("binaries", []) if not _command_exists(str(b))]
+    if missing_bins:
+        return f"missing binaries: {', '.join(missing_bins)}"
+
+    markers = [str(m) for m in spec.get("markers", [])]
+    if markers and any(not (repo_root / marker).exists() for marker in markers):
+        return f"missing required markers: {', '.join(markers)}"
+
+    markers_any = [str(m) for m in spec.get("markers_any", [])]
+    if markers_any and not any((repo_root / marker).exists() for marker in markers_any):
+        return f"missing any of markers: {', '.join(markers_any)}"
+
+    script = str(spec.get("script", "")).strip()
+    if script:
+        scripts = package_json.get("scripts")
+        if not isinstance(scripts, dict) or script not in scripts:
+            return f"package.json missing script: {script}"
+
+    return None
+
+
+def _available_checks_with_reasons(repo_root: Path) -> Dict[str, Any]:
+    package_json = _read_package_json(repo_root)
+    available: List[str] = []
+    unavailable: List[Dict[str, str]] = []
+    for spec in CHECK_SPECS:
+        command = str(spec["command"])
+        reason = _check_spec_reason(repo_root, spec, package_json)
+        if reason is None:
+            available.append(command)
+        else:
+            unavailable.append({"command": command, "reason": reason})
+    return {"available": available, "unavailable": unavailable}
+
+
+def _probe_binary(binary: str) -> Dict[str, Any]:
+    cp = _run_command(["which", binary])
+    found = cp.returncode == 0 and bool((cp.stdout or "").strip())
+    return {
+        "binary": binary,
+        "found": found,
+        "path": (cp.stdout or "").strip() if found else None,
+    }
 
 
 def _path_to_uri(path: Path) -> str:
@@ -729,7 +890,7 @@ def _lsp_client_for_repo(repo_root: Path, language: str | None) -> tuple[_LspCli
     if not command:
         detected = lang or "unknown"
         raise ToolError(
-            f"No supported LSP server found for language '{detected}'. Install one of: rust-analyzer, pylsp, gopls, typescript-language-server, jdtls, kotlin-language-server."
+            f"No supported LSP server found for language '{detected}'. Install one of: rust-analyzer, pylsp, gopls, typescript-language-server, jdtls, kotlin-language-server, bash-language-server, yaml-language-server."
         )
     client = _LspClient(command, cwd=repo_root)
     client.initialize(repo_root)
@@ -979,6 +1140,12 @@ def handle_search_text(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
             }
         )
 
+    _bump_metric(state, "search_calls")
+    lsp_status = str(state.get("lsp_status", "")).strip().lower()
+    if lsp_status in {"unavailable", "failure"}:
+        _bump_metric(state, "search_fallback_calls")
+    set_thread_state(thread_id, state)
+
     return {
         "ok": True,
         "query": query,
@@ -1159,8 +1326,14 @@ def handle_run_checks(args: Dict[str, Any], config: Dict[str, Any], thread_id: s
     repo_root = Path(state["repo_root"])
 
     commands = args.get("commands")
+    available_info = _available_checks_with_reasons(repo_root)
+    available_commands = set(available_info["available"])
+    if commands is None:
+        commands = sorted(available_commands)
     if not isinstance(commands, list) or not commands:
-        raise ToolError("run_checks requires a non-empty commands array.")
+        raise ToolError(
+            "No runnable checks available. Install missing toolchain pieces or pass explicit commands."
+        )
 
     stop_on_failure = bool(args.get("stop_on_failure", True))
 
@@ -1170,7 +1343,14 @@ def handle_run_checks(args: Dict[str, Any], config: Dict[str, Any], thread_id: s
             raise ToolError("Each command must be a string.")
         cmd = raw.strip()
         if not _is_allowed_check_command(cmd):
-            raise ToolError(f"Command is not in the allowlist: {cmd}")
+            raise ToolError(f"Command is invalid or contains forbidden shell operators: {cmd}")
+        if cmd not in available_commands:
+            reason = "command is not runnable in this repository/toolchain"
+            for item in available_info["unavailable"]:
+                if item.get("command") == cmd:
+                    reason = str(item.get("reason") or reason)
+                    break
+            raise ToolError(f"Command is not currently available: {cmd} ({reason})")
 
         start = time.time()
         cp = _run_command(shlex.split(cmd), cwd=repo_root, timeout=1800)
@@ -1184,6 +1364,7 @@ def handle_run_checks(args: Dict[str, Any], config: Dict[str, Any], thread_id: s
             "stderr": _clip(cp.stderr or ""),
         }
         results.append(result)
+        _record_check_metric(state, cmd, cp.returncode)
 
         if cp.returncode != 0 and stop_on_failure:
             break
@@ -1201,6 +1382,179 @@ def handle_run_checks(args: Dict[str, Any], config: Dict[str, Any], thread_id: s
         "ok": True,
         "all_passed": all_passed,
         "results": results,
+        "available_commands": sorted(available_commands),
+        "unavailable_commands": available_info["unavailable"],
+    }
+
+
+def handle_install_toolchain(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
+    del config
+    state = get_thread_state(thread_id)
+    repo_path = str(state.get("repo_path", "")).strip()
+    repo_root = Path(repo_path).resolve() if repo_path else WORKSPACE_ROOT
+    if repo_path and (not repo_root.exists() or not repo_root.is_relative_to(WORKSPACE_ROOT)):
+        repo_root = WORKSPACE_ROOT
+
+    manager = str(args.get("manager", "")).strip().lower()
+    if not manager:
+        raise ToolError("install_toolchain requires 'manager'.")
+    if manager not in TOOLCHAIN_INSTALLERS:
+        raise ToolError(
+            f"Unsupported manager: {manager}. Supported: {', '.join(sorted(TOOLCHAIN_INSTALLERS))}."
+        )
+
+    packages = _validate_toolchain_packages(manager, args.get("packages"))
+    global_install = bool(args.get("global", True))
+
+    commands: List[List[str]] = []
+    env = os.environ.copy()
+    if manager == "npm":
+        npm_prefix = TOOLCHAIN_ROOT / "npm"
+        npm_prefix.mkdir(parents=True, exist_ok=True)
+        npm_args = ["npm", "install", "--prefix", str(npm_prefix)]
+        commands.append(npm_args + packages)
+    elif manager == "pip":
+        pip_target = TOOLCHAIN_ROOT / "pip"
+        pip_target.mkdir(parents=True, exist_ok=True)
+        pip_args = ["python3", "-m", "pip", "install", "--disable-pip-version-check", "--target", str(pip_target)]
+        commands.append(pip_args + packages)
+    elif manager == "cargo":
+        if not _command_exists("cargo"):
+            raise ToolError("cargo is not installed. Install Rust toolchain first.")
+        cargo_root = TOOLCHAIN_ROOT / "cargo"
+        cargo_root.mkdir(parents=True, exist_ok=True)
+        commands.append(["cargo", "install", "--root", str(cargo_root), *packages])
+    elif manager == "go":
+        if not _command_exists("go"):
+            raise ToolError("go is not installed.")
+        go_bin = TOOLCHAIN_ROOT / "go" / "bin"
+        go_bin.mkdir(parents=True, exist_ok=True)
+        env["GOBIN"] = str(go_bin)
+        commands.extend([["go", "install", pkg] for pkg in packages])
+
+    results = []
+    for cmd in commands:
+        start = time.time()
+        cp = _run_command(cmd, cwd=repo_root, env=env, timeout=1800)
+        duration = round(time.time() - start, 3)
+        results.append(
+            {
+                "command": " ".join(cmd),
+                "exit_code": cp.returncode,
+                "duration_seconds": duration,
+                "stdout": _clip(cp.stdout or ""),
+                "stderr": _clip(cp.stderr or ""),
+            }
+        )
+        if cp.returncode != 0:
+            break
+
+    success = all(item["exit_code"] == 0 for item in results)
+    audit = {
+        "timestamp": int(time.time()),
+        "thread_id": thread_id,
+        "manager": manager,
+        "packages": packages,
+        "global": global_install,
+        "success": success,
+        "commands": [r["command"] for r in results],
+    }
+    _append_install_audit(audit)
+    return {
+        "ok": success,
+        "manager": manager,
+        "global": global_install,
+        "packages": packages,
+        "results": results,
+        "installed_count": len(packages) if success else 0,
+        "audit_file": str(INSTALL_AUDIT_FILE),
+        "toolchain_root": str(TOOLCHAIN_ROOT),
+    }
+
+
+def handle_list_checks(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
+    del args, config
+    state = _repo_state_or_error(thread_id)
+    repo_root = Path(state["repo_root"])
+    info = _available_checks_with_reasons(repo_root)
+    return {
+        "ok": True,
+        "available": info["available"],
+        "unavailable": info["unavailable"],
+        "count_available": len(info["available"]),
+    }
+
+
+def handle_metrics_report(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
+    del args, config
+    state = get_thread_state(thread_id)
+    metrics = state.get("metrics")
+    if not isinstance(metrics, dict):
+        metrics = {}
+    return {
+        "ok": True,
+        "thread_id": thread_id,
+        "metrics": metrics,
+    }
+
+
+def handle_toolchain_probe(args: Dict[str, Any], config: Dict[str, Any], thread_id: str) -> Dict[str, Any]:
+    del args, config
+    state = get_thread_state(thread_id)
+    repo_path = str(state.get("repo_path", "")).strip()
+    repo_root = Path(repo_path).resolve() if repo_path else None
+
+    toolchain_dirs = {
+        "root": str(TOOLCHAIN_ROOT),
+        "npm": str(TOOLCHAIN_ROOT / "npm"),
+        "pip": str(TOOLCHAIN_ROOT / "pip"),
+        "cargo": str(TOOLCHAIN_ROOT / "cargo"),
+        "go_bin": str(TOOLCHAIN_ROOT / "go" / "bin"),
+    }
+
+    binaries = [
+        "git",
+        "rg",
+        "python3",
+        "pip",
+        "npm",
+        "cargo",
+        "go",
+        "rust-analyzer",
+        "gopls",
+        "typescript-language-server",
+        "bash-language-server",
+        "yaml-language-server",
+    ]
+    binary_status = [_probe_binary(name) for name in binaries]
+    lsp_status = [_probe_binary(cmd[0]) for cmd in LSP_SERVER_BY_LANGUAGE.values()]
+
+    available_checks: Dict[str, Any] | None = None
+    if repo_root and repo_root.exists() and repo_root.is_relative_to(WORKSPACE_ROOT):
+        available_checks = _available_checks_with_reasons(repo_root)
+
+    path_hints = {
+        "prepend_path": [
+            str(TOOLCHAIN_ROOT / "npm" / "node_modules" / ".bin"),
+            str(TOOLCHAIN_ROOT / "cargo" / "bin"),
+            str(TOOLCHAIN_ROOT / "go" / "bin"),
+        ],
+        "pythonpath": str(TOOLCHAIN_ROOT / "pip"),
+    }
+
+    return {
+        "ok": True,
+        "thread_id": thread_id,
+        "repo_path": str(repo_root) if repo_root else None,
+        "install_audit_file": str(INSTALL_AUDIT_FILE),
+        "supported_install_managers": sorted(TOOLCHAIN_INSTALLERS),
+        "package_allowlist": {k: sorted(v) for k, v in TOOLCHAIN_PACKAGE_ALLOWLIST.items()},
+        "toolchain_dirs": toolchain_dirs,
+        "toolchain_dirs_exist": {k: Path(v).exists() for k, v in toolchain_dirs.items()},
+        "binaries": binary_status,
+        "lsp_servers": lsp_status,
+        "checks": available_checks,
+        "path_hints": path_hints,
     }
 
 
@@ -1214,6 +1568,22 @@ def handle_lsp_probe(args: Dict[str, Any], config: Dict[str, Any], thread_id: st
     available_servers = {}
     for language, cmd in LSP_SERVER_BY_LANGUAGE.items():
         available_servers[language] = _run_command(["which", cmd[0]]).returncode == 0
+
+    _bump_metric(state, "lsp_probe_calls")
+    state["lsp_status"] = "available" if command else "unavailable"
+    if command:
+        _bump_metric(state, "lsp_probe_success")
+    else:
+        _bump_metric(state, "lsp_probe_unavailable")
+    set_thread_state(thread_id, state)
+
+    _lsp_log(
+        "probe",
+        thread_id,
+        project_language=project_language or "unknown",
+        detected_server=command[0] if command else "none",
+        available=sum(1 for v in available_servers.values() if v),
+    )
 
     return {
         "ok": True,
@@ -1243,6 +1613,16 @@ def handle_lsp_definition(args: Dict[str, Any], config: Dict[str, Any], thread_i
 
     language = str(args.get("language", "")).strip() or _infer_language_from_path(rel_path)
     language_id = language or "plaintext"
+    _lsp_log(
+        "definition_attempt",
+        thread_id,
+        path=rel_path,
+        line=line,
+        character=character,
+        language=language or "auto",
+    )
+    _bump_metric(state, "lsp_definition_calls")
+    set_thread_state(thread_id, state)
     client, command, resolved_language = _lsp_client_for_repo(repo_root, language)
     try:
         _did_open_document(client, target, language_id, content)
@@ -1273,6 +1653,18 @@ def handle_lsp_definition(args: Dict[str, Any], config: Dict[str, Any], thread_i
                     "character": int(start.get("character", 0)),
                 }
             )
+
+    _lsp_log(
+        "definition_success",
+        thread_id,
+        path=rel_path,
+        language=resolved_language,
+        server=command[0],
+        count=len(locations),
+    )
+    state["lsp_status"] = "available"
+    _bump_metric(state, "lsp_definition_success")
+    set_thread_state(thread_id, state)
 
     return {
         "ok": True,
@@ -1307,6 +1699,19 @@ def handle_lsp_references(args: Dict[str, Any], config: Dict[str, Any], thread_i
     max_results = int(args.get("max_results", 200))
     max_results = max(1, min(max_results, 1000))
 
+    _lsp_log(
+        "references_attempt",
+        thread_id,
+        path=rel_path,
+        line=line,
+        character=character,
+        language=language or "auto",
+        include_declaration=include_declaration,
+        max_results=max_results,
+    )
+    _bump_metric(state, "lsp_references_calls")
+    set_thread_state(thread_id, state)
+
     client, command, resolved_language = _lsp_client_for_repo(repo_root, language)
     try:
         _did_open_document(client, target, language_id, content)
@@ -1338,6 +1743,18 @@ def handle_lsp_references(args: Dict[str, Any], config: Dict[str, Any], thread_i
             )
             if len(refs) >= max_results:
                 break
+
+    _lsp_log(
+        "references_success",
+        thread_id,
+        path=rel_path,
+        language=resolved_language,
+        server=command[0],
+        count=len(refs),
+    )
+    state["lsp_status"] = "available"
+    _bump_metric(state, "lsp_references_success")
+    set_thread_state(thread_id, state)
 
     return {
         "ok": True,
@@ -1524,6 +1941,10 @@ TOOL_HANDLERS = {
     "write_files": handle_write_files,
     "apply_patch": handle_apply_patch,
     "run_checks": handle_run_checks,
+    "list_checks": handle_list_checks,
+    "install_toolchain": handle_install_toolchain,
+    "toolchain_probe": handle_toolchain_probe,
+    "metrics_report": handle_metrics_report,
     "lsp_probe": handle_lsp_probe,
     "lsp_definition": handle_lsp_definition,
     "lsp_references": handle_lsp_references,
@@ -1601,6 +2022,12 @@ class CapabilityServicer(capability_pb2_grpc.CapabilityServicer):
             log.info("Tool success tool=%s thread_id=%s", tool, thread_id)
             return capability_pb2.InvokeResponse(result_json=result_json.encode("utf-8"))
         except ToolError as exc:
+            if tool.startswith("lsp_"):
+                _lsp_log("failure", thread_id, tool=tool, error=str(exc))
+                state = get_thread_state(thread_id)
+                state["lsp_status"] = "failure"
+                _bump_metric(state, "lsp_failures")
+                set_thread_state(thread_id, state)
             log.warning("Tool error tool=%s thread_id=%s error=%s", tool, thread_id, exc)
             return capability_pb2.InvokeResponse(error=str(exc))
         except subprocess.TimeoutExpired as exc:

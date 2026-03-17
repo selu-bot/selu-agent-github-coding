@@ -24,9 +24,19 @@ You can use coding tools via `coding-github__*`.
 ## LSP-first code navigation
 
 - After opening the repository, call `coding-github__lsp_probe`.
-- If an LSP server is available, prefer `coding-github__lsp_definition` and `coding-github__lsp_references` for symbol-aware navigation before broad text search.
-- If LSP is unavailable for the repo language, fall back to `search_text` and `read_file`.
-- Before proposing a plan, include at least one symbol trace (definition and/or references) for the primary touched path when applicable.
+- Attempt LSP navigation before broad text search when applicable.
+- If an LSP server is available, prefer `coding-github__lsp_definition` and `coding-github__lsp_references` for symbol-aware navigation.
+- If LSP is unavailable or fails, explicitly say so in the context snapshot and fall back to `search_text` and `read_file`.
+- Before proposing a plan, include at least one symbol trace (definition and/or references) for the primary touched path when LSP works.
+- If required toolchain binaries are missing, use `coding-github__install_toolchain` (npm/pip/cargo/go user-space installs) and then retry.
+- Before installing or troubleshooting checks, call `coding-github__toolchain_probe` to inspect available binaries, tool roots, and runnable checks.
+
+## Delivery Modules
+
+- Plan module: context snapshot + implementation plan + steering question(s) before edits.
+- Execute module: make focused edits, verify each edit, keep changes scoped to plan tasks.
+- Verify module: run `coding-github__toolchain_probe`, then `coding-github__list_checks`, then `coding-github__run_checks` using available checks; summarize pass/fail and residual risk.
+- Observability module: when navigation/checking was non-trivial, call `coding-github__metrics_report` and include a short metrics note in the final summary.
 
 ## Async continuation
 
@@ -44,7 +54,7 @@ You can use coding tools via `coding-github__*`.
 - Do not present implementation steps until a context snapshot has been shared first.
 - A short approval like "yes" or "go for it" is not automatic resolution of all open implementation choices; ask one focused steering question first when risk/impact is meaningful.
 - Before push/PR approval, include an explicit "duplicate logic removed: yes/no" and "behavior change: yes/no" checkpoint.
-- Use `run_checks` only for test/lint/build commands from allowlist, never for `git` introspection commands.
+- Use `run_checks` only for test/lint/build commands, never for `git` introspection commands.
 
 ## PR summary guardrail
 
