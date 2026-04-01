@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -- Prepare metadata --
+
+      - name: Lowercase image name
+        id: meta
+        run: |
+          owner="${{ github.repository_owner }}"
+          echo "cap_image=${owner,,}/selu-cap-coding-github" >> "$GITHUB_OUTPUT"
+          echo "base_image=${owner,,}/selu-cap-coding-github-base" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # -- Build & push capability Docker image --
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check toolchain base image
+        id: base
+        run: |
+          base_ref="${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1"
+          if docker manifest inspect "${base_ref}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push toolchain base image
+        if: steps.base.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: capabilities/coding-github/container
+          file: capabilities/coding-github/container/Dockerfile.base
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=coding-github-base
+          cache-to: type=gha,mode=max,scope=coding-github-base
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-latest
+
+      - name: Build and push capability image
+        uses: docker/build-push-action@v6
+        with:
+          context: capabilities/coding-github/container
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1
+          cache-from: type=gha,scope=coding-github-app
+          cache-to: type=gha,mode=max,scope=coding-github-app
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:latest
+
+      - name: Verify required binaries in released image
+        run: |
+          image_ref="${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}"
+          docker pull "${image_ref}"
+          docker run --rm "${image_ref}" /bin/sh -lc '
+            set -eu
+            for bin in git rg python3 rust-analyzer gopls typescript-language-server bash-language-server yaml-language-server; do
+              command -v "$bin" >/dev/null 2>&1 || { echo "Missing required binary: $bin"; exit 1; }
+            done
+          '
+
+      # -- Create agent archive --
+
+      - name: Update manifest with GHCR image reference
+        run: |
+          sed -i "s|image: selu-cap-coding-github:latest|image: ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}|" \
+            capabilities/coding-github/manifest.yaml
+
+      - name: Create agent archive
+        run: |
+          tar czf agent.tar.gz \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.DS_Store' \
+            --exclude='capabilities/*/container' \
+            --exclude='README.md' \
+            agent.yaml \
+            agent.md \
+            capabilities/
+
+      - name: Compute SHA-256
+        id: sha
+        run: |
+          sha=$(sha256sum agent.tar.gz | awk '{print $1}')
+          echo "sha256=${sha}" >> "$GITHUB_OUTPUT"
+          echo "### Archive SHA-256" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${sha}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # -- Create GitHub release --
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agent.tar.gz
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            Install from the Selu marketplace UI, or use these details for manual configuration:
+
+            **Archive URL:**
+            ```
+            https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/agent.tar.gz
+            ```
+
+            **Archive SHA-256:**
+            ```
+            ${{ steps.sha.outputs.sha256 }}
+            ```
+
+            **Capability image:**
+            ```
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}
+            ```
+
+            ### Marketplace JSON entry
+
+            ```json
+            {
+              "id": "coding-github",
+              "name": "Coding Assistant",
+              "description": "GitHub coding workflow agent: checkout, branch, plan, implement, checks, push, and PR.",
+              "version": "${{ steps.version.outputs.version }}",
+              "author": "Selu Team",
+              "archive_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/agent.tar.gz",
+              "archive_sha256": "${{ steps.sha.outputs.sha256 }}",
+              "capability_images": ["${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}"]
+            }
+            ```
+
+      # -- Notify Selu marketplace --
+
+      - name: Notify Selu marketplace
+        run: |
+          curl -sf -X POST \
+            "${{ secrets.SELU_WEBHOOK_URL }}" \
+            -H "Authorization: Bearer ${{ secrets.SELU_WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "version": "${{ steps.version.outputs.version }}",
+              "archive_url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/agent.tar.gz",
+              "archive_sha256": "${{ steps.sha.outputs.sha256 }}",
+              "capability_images": ["${{ env.REGISTRY }}/${{ steps.meta.outputs.cap_image }}:${{ steps.version.outputs.version }}"]
+            }'
