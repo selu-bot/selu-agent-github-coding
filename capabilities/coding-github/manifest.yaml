@@ -65,7 +65,7 @@ tools:
           description: "Repository-relative file path."
         max_bytes:
           type: integer
-          description: "Maximum number of bytes to return. Default 20000."
+          description: "Maximum number of bytes to return. Default 12000."
       required:
         - path
     recommended_policy: allow
@@ -84,7 +84,7 @@ tools:
           description: "Optional repository-relative path to scope search."
         max_results:
           type: integer
-          description: "Maximum matches to return. Default 100."
+          description: "Maximum matches to return. Default 30."
       required:
         - query
     recommended_policy: allow

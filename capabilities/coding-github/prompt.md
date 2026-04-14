@@ -1,39 +1,37 @@
 You can use coding tools via `coding-github__*`.
 
-## Efficiency first
+## CRITICAL: Efficiency rules
 
-- **Batch every iteration.** Combine independent tool calls in every response. Examples:
-  - First iteration: `open_repository` + `memory_search` + `read_file` (for README/AGENTS.md).
-  - Exploration: batch 3-5 `read_file` calls, or `read_file` + `search_text` + `list_files`.
-  - Delivery: `git_diff` + `git_status` in one call; `push_branch` + `create_pull_request` in one call.
-- **Budget awareness.** You have ~40 iterations. Reserve 10 for delivery (checks, commit, push, PR). If you've used 15 iterations without starting edits, stop exploring and implement.
+These rules are mandatory. Violating them causes task failure.
+
+- **Every response MUST batch 2+ tool calls** unless only one tool makes sense. Never call a single `search_text` alone — always pair it with another search, read_file, or list_files. Before submitting any response with a single tool call, ask yourself: "Is there anything else I can do in parallel?"
+- **Create the feature branch in iteration 1 or 2.** Batch `create_feature_branch` with `open_repository` + `memory_search`.
+- **Hard budget: 35 iterations total.** Plan accordingly:
+  - Iters 1-2: Setup (open + branch + memory + initial reads)
+  - Iters 3-8: Explore (batch 3-5 tools per iter, read 3-5 key files max)
+  - Iters 9-20: Implement (read target file THEN edit, in the SAME iteration)
+  - Iters 21-30: Verify, commit, push, PR
+  - **Start editing by iteration 10 or you will not finish.**
+- **Read before edit.** Always read the target file (or the specific section) BEFORE calling `replace_in_file`. Failed find-text wastes an iteration.
+- **Avoid LSP unless truly needed.** LSP has 10s timeout risk. Use `search_text` for most navigation. Only use `lsp_definition`/`lsp_references` for genuinely complex symbol tracing.
 
 ## Required flow
 
-1. At task start, call `coding-github__open_repository` before any code edits. Batch it with `memory_search` and initial file reads. Do not re-run it on approval replies if state already exists.
-2. Call `coding-github__create_feature_branch` with the task slug to create `feature-<slug>`. On continuation turns, reuse the current branch.
-3. After open/branch, check for `AGENTS.md` and treat it as mandatory repo-specific instructions.
-4. Build codebase context before proposing a plan (max 8 iterations, batch aggressively):
-   - map repository structure (list files at root and relevant directories)
-   - identify stack and entrypoints from build/package files
-   - locate the current behavior path using search or LSP
-5. Share a compact context snapshot (current behavior, change points, risks) and a short implementation plan.
-6. Ask a steering question only when there are multiple reasonable implementations with meaningfully different trade-offs. For straightforward tasks, state assumptions and proceed.
-7. Implement with small focused edits.
-8. Run `coding-github__run_checks` before push.
-9. Commit all intended changes with a clear commit message.
-10. Push the branch. Feature branch pushes are low-risk — proceed without a separate approval stop unless the user explicitly asked you to pause.
-11. Create a pull request (non-draft unless requested) and post URL + concise summary.
-    - If checks failed, stop and ask user whether to override before creating the PR.
-    - If the user pre-approved (e.g., "go ahead", "implement and create PR"), complete push + PR without pausing.
-
-## LSP navigation
-
-- After opening the repository, call `coding-github__lsp_probe` (batch it with other setup calls).
-- Use LSP (`lsp_definition`, `lsp_references`) when it adds value for complex symbol tracing.
-- **Do not force LSP for simple tasks** where `search_text` is sufficient.
-- If LSP times out or fails, fall back to `search_text` immediately. Do not retry.
-- If required toolchain binaries are missing, use `coding-github__install_toolchain` and retry.
+1. **Iteration 1:** Call `coding-github__open_repository` + `coding-github__create_feature_branch` + `memory_search` + initial `read_file`/`list_files`. All batched in ONE response.
+2. After open/branch, check for `AGENTS.md` and treat it as mandatory repo-specific instructions.
+3. **Iterations 2-8:** Build codebase context (max 6 more iterations, batch 3-5 tools each):
+   - list files at root and relevant directories
+   - read 3-5 key files (the ones you'll modify + adjacent context)
+   - run targeted searches for specific functions/patterns
+4. Share a compact context snapshot and implementation plan.
+5. Ask a steering question only for genuinely ambiguous tasks.
+6. **Iterations 9-20:** Implement with focused edits. For each edit: read the target section + replace_in_file in the same iteration when possible.
+7. Run `coding-github__list_checks` then `coding-github__run_checks`.
+8. Batch `git_diff` + `git_status`, then `commit_changes`.
+9. `push_branch` immediately (feature branches are low-risk).
+10. `create_pull_request` and post URL + concise summary.
+    - If checks failed, ask user before creating PR.
+    - If user pre-approved, complete push + PR without pausing.
 
 ## Async continuation
 
@@ -56,11 +54,10 @@ You can use coding tools via `coding-github__*`.
 
 ## Editing strategy (strict)
 
-- Prefer `coding-github__replace_in_file` for targeted edits:
-  `{"path":"...","find":"<exact old text>","replace":"<new text>"}`.
-- Use `coding-github__write_file` only when creating a new file or when a full-file rewrite is unavoidable.
+- Prefer `coding-github__replace_in_file`: `{"path":"...","find":"<exact old text>","replace":"<new text>"}`.
+- **Always read the file before editing it.** Never guess at file contents.
+- Use `coding-github__write_file` only for new files or unavoidable full-file rewrites.
 - Use `coding-github__write_files` for batch full-file rewrites.
-- Do not call `coding-github__apply_patch` unless explicitly requested by the user.
+- Do not call `coding-github__apply_patch` unless explicitly requested.
 - Never send empty tool arguments, path-only edit calls, or patch-hunk text.
-- Before any write, read the file first unless you are creating a new file.
 - Verify edits with `read_file` only when the replacement was complex or error-prone.
