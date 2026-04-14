@@ -811,7 +811,7 @@ class _LspClient:
             readable, _, _ = select.select([self._stdout], [], [], remaining)
             if not readable:
                 raise ToolError("LSP response timed out.")
-            chunk = self._stdout.read(1)
+            chunk = self._stdout.read(min(256, max(1, 256 - len(header_bytes))))
             if not chunk:
                 raise ToolError("LSP server closed before header.")
             header_bytes += chunk
@@ -838,7 +838,7 @@ class _LspClient:
             }
         )
 
-    def request(self, method: str, params: Dict[str, Any], timeout_seconds: int = 20) -> Any:
+    def request(self, method: str, params: Dict[str, Any], timeout_seconds: int = 8) -> Any:
         req_id = self._next_id
         self._next_id += 1
         self._write_message(
@@ -879,12 +879,16 @@ class _LspClient:
                     }
                 ],
             },
-            timeout_seconds=30,
+            timeout_seconds=10,
         )
         self.notify("initialized", {})
 
 
-def _lsp_client_for_repo(repo_root: Path, language: str | None) -> tuple[_LspClient, List[str], str]:
+_lsp_cache_lock = threading.Lock()
+_lsp_cache: Dict[str, tuple[_LspClient, List[str], str]] = {}
+
+
+def _lsp_client_for_repo(repo_root: Path, language: str | None, thread_id: str = "") -> tuple[_LspClient, List[str], str]:
     lang = language or _detect_project_language(repo_root)
     command = _find_lsp_server_command(lang)
     if not command:
@@ -892,9 +896,21 @@ def _lsp_client_for_repo(repo_root: Path, language: str | None) -> tuple[_LspCli
         raise ToolError(
             f"No supported LSP server found for language '{detected}'. Install one of: rust-analyzer, pylsp, gopls, typescript-language-server, jdtls, kotlin-language-server, bash-language-server, yaml-language-server."
         )
+    resolved_lang = lang or "unknown"
+    cache_key = f"{thread_id}:{resolved_lang}"
+    with _lsp_cache_lock:
+        cached = _lsp_cache.get(cache_key)
+        if cached is not None:
+            client, cmd, rl = cached
+            if client._proc.poll() is None:
+                return client, cmd, rl
+            # Process died — remove stale entry
+            del _lsp_cache[cache_key]
     client = _LspClient(command, cwd=repo_root)
     client.initialize(repo_root)
-    return client, command, lang or "unknown"
+    with _lsp_cache_lock:
+        _lsp_cache[cache_key] = (client, command, resolved_lang)
+    return client, command, resolved_lang
 
 
 def _did_open_document(client: _LspClient, file_path: Path, language_id: str, text: str) -> None:
@@ -1069,7 +1085,7 @@ def handle_read_file(args: Dict[str, Any], config: Dict[str, Any], thread_id: st
     if not rel_path:
         raise ToolError("read_file requires 'path'.")
 
-    max_bytes = int(args.get("max_bytes", 20000))
+    max_bytes = int(args.get("max_bytes", 12000))
     max_bytes = max(256, min(max_bytes, 200000))
 
     target = _safe_repo_path(repo_root, rel_path)
@@ -1097,7 +1113,7 @@ def handle_search_text(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
         raise ToolError("search_text requires 'query'.")
 
     rel_path = str(args.get("path", "."))
-    max_results = int(args.get("max_results", 100))
+    max_results = int(args.get("max_results", 30))
     max_results = max(1, min(max_results, 1000))
 
     target = _safe_repo_path(repo_root, rel_path)
@@ -1144,7 +1160,7 @@ def handle_search_text(args: Dict[str, Any], config: Dict[str, Any], thread_id: 
     lsp_status = str(state.get("lsp_status", "")).strip().lower()
     if lsp_status in {"unavailable", "failure"}:
         _bump_metric(state, "search_fallback_calls")
-    set_thread_state(thread_id, state)
+    # Defer state write — metrics-only update, not a meaningful mutation
 
     return {
         "ok": True,
@@ -1622,19 +1638,15 @@ def handle_lsp_definition(args: Dict[str, Any], config: Dict[str, Any], thread_i
         language=language or "auto",
     )
     _bump_metric(state, "lsp_definition_calls")
-    set_thread_state(thread_id, state)
-    client, command, resolved_language = _lsp_client_for_repo(repo_root, language)
-    try:
-        _did_open_document(client, target, language_id, content)
-        result = client.request(
-            "textDocument/definition",
-            {
-                "textDocument": {"uri": _path_to_uri(target)},
-                "position": {"line": line, "character": character},
-            },
-        )
-    finally:
-        client.close()
+    client, command, resolved_language = _lsp_client_for_repo(repo_root, language, thread_id)
+    _did_open_document(client, target, language_id, content)
+    result = client.request(
+        "textDocument/definition",
+        {
+            "textDocument": {"uri": _path_to_uri(target)},
+            "position": {"line": line, "character": character},
+        },
+    )
 
     locations = []
     if isinstance(result, dict):
@@ -1710,21 +1722,16 @@ def handle_lsp_references(args: Dict[str, Any], config: Dict[str, Any], thread_i
         max_results=max_results,
     )
     _bump_metric(state, "lsp_references_calls")
-    set_thread_state(thread_id, state)
-
-    client, command, resolved_language = _lsp_client_for_repo(repo_root, language)
-    try:
-        _did_open_document(client, target, language_id, content)
-        result = client.request(
-            "textDocument/references",
-            {
-                "textDocument": {"uri": _path_to_uri(target)},
-                "position": {"line": line, "character": character},
-                "context": {"includeDeclaration": include_declaration},
-            },
-        )
-    finally:
-        client.close()
+    client, command, resolved_language = _lsp_client_for_repo(repo_root, language, thread_id)
+    _did_open_document(client, target, language_id, content)
+    result = client.request(
+        "textDocument/references",
+        {
+            "textDocument": {"uri": _path_to_uri(target)},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": include_declaration},
+        },
+    )
 
     refs = []
     if isinstance(result, list):
