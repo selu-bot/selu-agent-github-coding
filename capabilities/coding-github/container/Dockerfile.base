@@ -18,6 +18,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     default-jre-headless \
     unzip
 
+# Install Rust toolchain (required for rust-analyzer to resolve symbols)
+# CARGO_HOME is set to /usr/local/cargo at build time for toolchain installation.
+# At runtime the app Dockerfile overrides CARGO_HOME to a workspace-backed path
+# so that the registry/crate cache persists across container restarts.
+# PATH keeps the build-time bin dir so preinstalled binaries remain reachable.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH="/usr/local/cargo/bin:${PATH}"
+
+RUN set -eux; \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal; \
+    rustup component add rust-src; \
+    rustc --version; \
+    cargo --version
+
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \

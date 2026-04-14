@@ -27,6 +27,17 @@ RUN id -u 1000 2>/dev/null || useradd --uid 1000 --create-home selu
 RUN mkdir -p /workspace && chown -R 1000:1000 /workspace
 VOLUME /workspace
 
+# Redirect package-manager caches to the persistent workspace volume so that
+# downloaded dependencies survive container restarts within the same session.
+# Toolchain binaries (cargo, rustc, go, node) remain on the read-only rootfs
+# via PATH; only the download/registry caches move to writable storage.
+ENV CARGO_HOME=/workspace/.cache/cargo \
+    GOPATH=/workspace/.cache/go \
+    GOMODCACHE=/workspace/.cache/go/pkg/mod \
+    npm_config_cache=/workspace/.cache/npm \
+    PIP_CACHE_DIR=/workspace/.cache/pip \
+    XDG_CACHE_HOME=/workspace/.cache
+
 EXPOSE 50051
 USER 1000:1000
 

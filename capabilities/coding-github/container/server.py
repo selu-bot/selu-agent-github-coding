@@ -865,7 +865,7 @@ class _LspClient:
             return msg.get("result")
         raise ToolError(f"LSP request timed out: {method}")
 
-    def initialize(self, root_path: Path) -> None:
+    def initialize(self, root_path: Path, timeout_seconds: int = 60) -> None:
         self.request(
             "initialize",
             {
@@ -879,13 +879,36 @@ class _LspClient:
                     }
                 ],
             },
-            timeout_seconds=10,
+            timeout_seconds=timeout_seconds,
         )
         self.notify("initialized", {})
 
 
 _lsp_cache_lock = threading.Lock()
 _lsp_cache: Dict[str, tuple[_LspClient, List[str], str]] = {}
+_lsp_warmup_threads: Dict[str, threading.Thread] = {}
+
+
+def _lsp_warmup(repo_root: Path, thread_id: str) -> None:
+    """Background LSP initialization so the server is ready when first needed."""
+    lang = _detect_project_language(repo_root)
+    if not lang:
+        return
+    command = _find_lsp_server_command(lang)
+    if not command:
+        return
+    cache_key = f"{thread_id}:{lang}"
+    with _lsp_cache_lock:
+        if cache_key in _lsp_cache:
+            return
+    try:
+        client = _LspClient(command, cwd=repo_root)
+        client.initialize(repo_root, timeout_seconds=90)
+        with _lsp_cache_lock:
+            _lsp_cache[cache_key] = (client, command, lang)
+        log.info("LSP warm-up complete language=%s thread_id=%s", lang, thread_id)
+    except Exception as exc:
+        log.warning("LSP warm-up failed language=%s error=%s", lang, exc)
 
 
 def _lsp_client_for_repo(repo_root: Path, language: str | None, thread_id: str = "") -> tuple[_LspClient, List[str], str]:
@@ -898,6 +921,14 @@ def _lsp_client_for_repo(repo_root: Path, language: str | None, thread_id: str =
         )
     resolved_lang = lang or "unknown"
     cache_key = f"{thread_id}:{resolved_lang}"
+
+    # If a background warm-up is running, wait for it to finish (up to 60s).
+    warmup_key = f"{thread_id}:{repo_root}"
+    warmup_thread = _lsp_warmup_threads.get(warmup_key)
+    if warmup_thread is not None and warmup_thread.is_alive():
+        log.info("Waiting for LSP warm-up to complete language=%s", resolved_lang)
+        warmup_thread.join(timeout=60)
+
     with _lsp_cache_lock:
         cached = _lsp_cache.get(cache_key)
         if cached is not None:
@@ -906,6 +937,8 @@ def _lsp_client_for_repo(repo_root: Path, language: str | None, thread_id: str =
                 return client, cmd, rl
             # Process died — remove stale entry
             del _lsp_cache[cache_key]
+
+    # No cached client — initialize synchronously (cold start fallback).
     client = _LspClient(command, cwd=repo_root)
     client.initialize(repo_root)
     with _lsp_cache_lock:
@@ -979,6 +1012,14 @@ def handle_open_repository(args: Dict[str, Any], config: Dict[str, Any], thread_
         }
     )
     set_thread_state(thread_id, state)
+
+    # Start LSP warm-up in the background so the server is indexed and ready
+    # by the time the agent needs symbol navigation.
+    warmup_key = f"{thread_id}:{repo_root}"
+    if warmup_key not in _lsp_warmup_threads or not _lsp_warmup_threads[warmup_key].is_alive():
+        t = threading.Thread(target=_lsp_warmup, args=(repo_root, thread_id), daemon=True)
+        _lsp_warmup_threads[warmup_key] = t
+        t.start()
 
     return {
         "ok": True,
@@ -2049,8 +2090,24 @@ class CapabilityServicer(capability_pb2_grpc.CapabilityServicer):
         yield capability_pb2.InvokeChunk(data=resp.result_json, done=True, error=resp.error)
 
 
+CACHE_ROOT = WORKSPACE_ROOT / ".cache"
+CACHE_DIRS = [
+    CACHE_ROOT / "cargo",
+    CACHE_ROOT / "go" / "pkg" / "mod",
+    CACHE_ROOT / "npm",
+    CACHE_ROOT / "pip",
+]
+
+
+def _ensure_cache_dirs() -> None:
+    """Create workspace-backed cache directories for package managers."""
+    for d in CACHE_DIRS:
+        d.mkdir(parents=True, exist_ok=True)
+
+
 def serve() -> None:
     WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+    _ensure_cache_dirs()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
     capability_pb2_grpc.add_CapabilityServicer_to_server(CapabilityServicer(), server)

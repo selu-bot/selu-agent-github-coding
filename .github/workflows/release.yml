@@ -48,7 +48,7 @@ jobs:
       - name: Check toolchain base image
         id: base
         run: |
-          base_ref="${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1"
+          base_ref="${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v2"
           if docker manifest inspect "${base_ref}" > /dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
@@ -66,7 +66,7 @@ jobs:
           cache-from: type=gha,scope=coding-github-base
           cache-to: type=gha,mode=max,scope=coding-github-base
           tags: |
-            ${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v2
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-latest
 
       - name: Build and push capability image
@@ -76,7 +76,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
-            BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v1
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.meta.outputs.base_image }}:toolchain-v2
           cache-from: type=gha,scope=coding-github-app
           cache-to: type=gha,mode=max,scope=coding-github-app
           tags: |
