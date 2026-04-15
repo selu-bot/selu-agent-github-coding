@@ -24,19 +24,20 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY --from=builder /build/capability_pb2.py /build/capability_pb2_grpc.py ./
 COPY server.py ./
 RUN id -u 1000 2>/dev/null || useradd --uid 1000 --create-home selu
-RUN mkdir -p /workspace && chown -R 1000:1000 /workspace
+RUN mkdir -p /workspace /cache && chown -R 1000:1000 /workspace /cache
 VOLUME /workspace
 
-# Redirect package-manager caches to the persistent workspace volume so that
-# downloaded dependencies survive container restarts within the same session.
+# Redirect package-manager caches to the persistent /cache volume so that
+# downloaded dependencies survive across sessions (not just container restarts).
+# The /cache volume is user-scoped and managed via the web UI.
 # Toolchain binaries (cargo, rustc, go, node) remain on the read-only rootfs
-# via PATH; only the download/registry caches move to writable storage.
-ENV CARGO_HOME=/workspace/.cache/cargo \
-    GOPATH=/workspace/.cache/go \
-    GOMODCACHE=/workspace/.cache/go/pkg/mod \
-    npm_config_cache=/workspace/.cache/npm \
-    PIP_CACHE_DIR=/workspace/.cache/pip \
-    XDG_CACHE_HOME=/workspace/.cache
+# via PATH; only the download/registry caches move to the cache volume.
+ENV CARGO_HOME=/cache/cargo \
+    GOPATH=/cache/go \
+    GOMODCACHE=/cache/go/pkg/mod \
+    npm_config_cache=/cache/npm \
+    PIP_CACHE_DIR=/cache/pip \
+    XDG_CACHE_HOME=/cache
 
 EXPOSE 50051
 USER 1000:1000

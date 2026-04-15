@@ -2090,7 +2090,7 @@ class CapabilityServicer(capability_pb2_grpc.CapabilityServicer):
         yield capability_pb2.InvokeChunk(data=resp.result_json, done=True, error=resp.error)
 
 
-CACHE_ROOT = WORKSPACE_ROOT / ".cache"
+CACHE_ROOT = Path(os.environ.get("SELU_CACHE_ROOT", "/cache")).resolve()
 CACHE_DIRS = [
     CACHE_ROOT / "cargo",
     CACHE_ROOT / "go" / "pkg" / "mod",

@@ -85,4 +85,4 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     && install -m 0755 "$(go env GOPATH)/bin/gopls" /usr/local/bin/gopls
 
 RUN id -u 1000 2>/dev/null || useradd --uid 1000 --create-home selu
-RUN mkdir -p /workspace && chown -R 1000:1000 /workspace
+RUN mkdir -p /workspace /cache && chown -R 1000:1000 /workspace /cache

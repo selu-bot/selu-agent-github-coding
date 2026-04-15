@@ -418,6 +418,8 @@ network:
     - "raw.githubusercontent.com:443"
 
 filesystem: workspace
+cache:
+  enabled: true
 
 credentials:
   - name: GITHUB_APP_ID
