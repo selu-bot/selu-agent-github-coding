@@ -17,6 +17,19 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
+# Install C toolchain so that `cargo check` (and other compiled-language
+# checks) can find a linker.  The base image already ships these, but when
+# the default python:3.12-slim is used we need them explicitly.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+    gcc \
+    libc6-dev \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/tmp/*
+
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
